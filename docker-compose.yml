@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: hvhn-backend
+    ports:
+      - "8080:8080"
+    # Secrets moved to environment variables for security
+    environment:
+      - SPRING_DATA_MONGODB_URI=${SPRING_DATA_MONGODB_URI}
+      - APP_MAIL_USERNAME=${APP_MAIL_USERNAME}
+      - APP_MAIL_PASSWORD=${APP_MAIL_PASSWORD}
+      - APP_MAIL_FROM=${APP_MAIL_FROM}
+    networks:
+      - hvhn-network
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  frontend:
+    build: ./frontend
+    container_name: hvhn-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - hvhn-network
+
+networks:
+  hvhn-network:
+    driver: bridge
