@@ -4,6 +4,7 @@ import com.google.firebase.auth.FirebaseToken;
 import com.hvhn.backend.dto.AuthRequest;
 import com.hvhn.backend.dto.AuthResponse;
 import com.hvhn.backend.dto.FirebaseAuthRequest;
+import com.hvhn.backend.dto.FirebaseUserDto;
 import com.hvhn.backend.dto.RegisterRequest;
 import com.hvhn.backend.model.User;
 import com.hvhn.backend.repository.UserRepository;
@@ -80,7 +81,7 @@ public class AuthService {
     }
 
     public AuthResponse loginWithFirebase(FirebaseAuthRequest request) {
-        com.hvhn.backend.dto.FirebaseUserDto decodedToken = firebaseService.verifyAndDecodeIdToken(request.getIdToken());
+        FirebaseUserDto decodedToken = firebaseService.verifyAndDecodeIdToken(request.getIdToken());
         String email = normalizeEmail(decodedToken.getEmail());
 
         if (!StringUtils.hasText(email)) {

@@ -70,7 +70,7 @@ public class VolunteerSchedulerService {
                 }
             }
 
-            if (!oldStatus.equalsIgnoreCase(newStatus)) {
+            if (!newStatus.equalsIgnoreCase(oldStatus)) {
                 user.setVolunteerStatus(newStatus);
                 userRepository.save(user);
                 updatedCount++;
