@@ -1,20 +1,30 @@
-# Frontend
-frontend/
+# Backend (not needed on frontend branch)
+backend/
+
+# Dependencies
 node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment files
+.env
+.env.*
+!.env.example
 
 # IDE
 .idea/
 .vscode/
 *.iml
 
-# Build
-backend/target/
-bin/
-
 # OS
 .DS_Store
 Thumbs.db
 
-# Misc
+# Logs
 *.log
-.env
+
+# Docker compose (root level only)
+docker-compose.yml
+.dockerignore
