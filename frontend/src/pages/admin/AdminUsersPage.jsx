@@ -58,7 +58,7 @@ export default function AdminUsersPage() {
         await adminApi.verifyUser(row.id);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id ? { ...entry, verified: true, status: entry.blocked ? 'BLOCKED' : 'VERIFIED' } : entry
           )),
         }));
@@ -69,7 +69,7 @@ export default function AdminUsersPage() {
         await adminApi.toggleBlockUser(row.id, row.blocked);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id
               ? { ...entry, blocked: !entry.blocked, status: !entry.blocked ? 'BLOCKED' : entry.verified ? 'VERIFIED' : 'UNVERIFIED' }
               : entry
@@ -86,7 +86,7 @@ export default function AdminUsersPage() {
         await adminApi.assignVolunteerBadge(row.id);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id ? { ...entry, role: 'VOLUNTEER', badge: 'Volunteer' } : entry
           )),
         }));

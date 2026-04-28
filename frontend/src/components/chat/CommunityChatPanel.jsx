@@ -98,7 +98,7 @@ export default function CommunityChatPanel({
     setChatRooms((current) => nextRooms.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), current));
   }, [roomUpdates]);
 
-  const communityRooms = chatRooms.filter((room) => {
+  const communityRooms = (Array.isArray(chatRooms) ? chatRooms : []).filter((room) => {
     if (room.type === 'GROUP') {
       return room.participants?.some((participant) => members.some((member) => samePerson(participant, member)));
     }
@@ -112,7 +112,7 @@ export default function CommunityChatPanel({
   }, [communityRooms.length, onConnectedCountChange]);
 
   useEffect(() => {
-    const connectedMembers = members.filter((member) => (
+    const connectedMembers = (Array.isArray(members) ? members : []).filter((member) => (
       communityRooms.some((room) => room.participants?.some((participant) => samePerson(participant, member)))
     ));
     onConnectedMembersChange?.(connectedMembers);
@@ -263,7 +263,7 @@ export default function CommunityChatPanel({
             onChange={(event) => setGroupName(event.target.value)}
           />
           <div className="chat-group-member-grid">
-            {members.filter((member) => member.email).map((member) => {
+            {(Array.isArray(members) ? members : []).filter((member) => member.email).map((member) => {
               const checked = selectedGroupEmails.includes(member.email);
               return (
                 <label key={member.email} className={`chat-group-option ${checked ? 'active' : ''}`}>
@@ -273,7 +273,7 @@ export default function CommunityChatPanel({
                     onChange={() => {
                       setSelectedGroupEmails((current) => (
                         checked
-                          ? current.filter((email) => email !== member.email)
+                          ? (Array.isArray(current) ? current : []).filter((email) => email !== member.email)
                           : [...current, member.email]
                       ));
                     }}

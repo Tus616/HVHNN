@@ -61,11 +61,12 @@ export function NotificationProvider({ children }) {
 
   // Firebase-style notification triggers
   const notifyRequestCreated = useCallback((request) => {
+    const titleText = request?.title || 'Help Request';
     addNotification({
       type: 'request',
-      title: `🆘 New ${request.urgency || 'MEDIUM'} Request`,
-      message: `"${request.title}" was raised${request.address ? ` near ${request.address}` : ''}.`,
-      link: `/request/${request.id}`,
+      title: `🆘 New ${request?.urgency || 'MEDIUM'} Request`,
+      message: `"${titleText}" was raised${request?.address ? ` near ${request.address}` : ''}.`,
+      link: `/request/${request?.id}`,
     });
   }, [addNotification]);
 

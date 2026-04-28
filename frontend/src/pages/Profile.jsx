@@ -82,16 +82,17 @@ export default function Profile() {
       }
 
       if (myRes.status === 'fulfilled') {
-        setMyRequests(myRes.value.data);
+        setMyRequests(Array.isArray(myRes.value.data) ? myRes.value.data : []);
       }
 
       if (helpedRes.status === 'fulfilled') {
-        setHelpedRequests(helpedRes.value.data);
+        setHelpedRequests(Array.isArray(helpedRes.value.data) ? helpedRes.value.data : []);
       }
 
       if (commRes.status === 'fulfilled' && joinedRes.status === 'fulfilled') {
         const joinedIds = joinedRes.value.data || [];
-        const all = commRes.value.data || [];
+        const allCommunitiesData = commRes.value.data || [];
+        const all = Array.isArray(allCommunitiesData) ? allCommunitiesData : [];
         setAllCommunities(all);
         setJoinedCommunities(all.filter((c) => joinedIds.includes(c.id)));
       }
@@ -106,8 +107,9 @@ export default function Profile() {
   const loadSavedRequests = async () => {
     try {
       const res = await apiService.getAllRequests();
-      const all = res.data || [];
-      const saved = all.filter((r) => bookmarks.includes(String(r.id)));
+      const allRequestsData = res.data || [];
+      const all = Array.isArray(allRequestsData) ? allRequestsData : [];
+      const saved = all.filter((r) => (Array.isArray(bookmarks) ? bookmarks : []).includes(String(r.id)));
       setSavedRequests(saved);
     } catch {
       // silently fail for saved requests
@@ -117,7 +119,7 @@ export default function Profile() {
   const loadImpact = async () => {
     try {
       const res = await apiService.getUserImpact();
-      setImpact(res.data);
+      setImpact(res.data || null);
       // Milestone: First help celebration
       if (res.data.totalPeopleHelped === 1 && !window.localStorage.getItem('hvhn_first_impact_celebrated')) {
         setShowConfetti(true);
@@ -143,7 +145,8 @@ export default function Profile() {
 
   const deleteContact = async (idx) => {
     if (!window.confirm('Remove this emergency contact?')) return;
-    const nextContacts = emergencyContacts.filter((_, i) => i !== idx);
+    const contacts = Array.isArray(emergencyContacts) ? emergencyContacts : [];
+    const nextContacts = contacts.filter((_, i) => i !== idx);
     setEmergencyContacts(nextContacts);
     saveEmergencyContacts(nextContacts);
   };

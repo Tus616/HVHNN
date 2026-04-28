@@ -134,12 +134,26 @@ public class CommunityService {
 
         // Code verification
         if (community.getJoinCode() != null && !community.getJoinCode().isBlank()) {
-            if (community.getJoinCode().equals(code)) {
+            if (community.getJoinCode().equalsIgnoreCase(code)) {
                 verifiedByCode = true;
             } else if (!verifiedByDomain) {
-                // If code is required but domain didn't match and code is wrong
+                // If code is provided but wrong, and domain didn't match, block immediately
                 throw new IllegalArgumentException("Invalid join code for this community");
             }
+        }
+
+        // Final permission check: If community has restrictions, user must have passed at least one
+        boolean hasRestrictions = (community.getInstitutionDomain() != null && !community.getInstitutionDomain().isBlank())
+                || (community.getJoinCode() != null && !community.getJoinCode().isBlank());
+
+        if (hasRestrictions && !verifiedByDomain && !verifiedByCode) {
+            String message = "You do not have permission to join this community.";
+            if (community.getInstitutionDomain() != null && !community.getInstitutionDomain().isBlank()) {
+                message += " Valid institutional email (@" + community.getInstitutionDomain() + ") required.";
+            } else {
+                message += " Valid join code required.";
+            }
+            throw new IllegalArgumentException(message);
         }
 
         // Promote user if verified by either method
@@ -170,6 +184,11 @@ public class CommunityService {
 
         memberRepository.delete(membership);
         removeMemberReference(community, currentUser.getId());
+    }
+
+    public boolean isMember(String communityId, String userId) {
+        if (communityId == null || userId == null) return false;
+        return memberRepository.existsByUserIdAndCommunityId(userId, communityId);
     }
 
     public List<Member> getMembers(String communityId) {

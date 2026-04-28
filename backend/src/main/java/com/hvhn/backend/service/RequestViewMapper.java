@@ -5,6 +5,7 @@ import com.hvhn.backend.model.User;
 import com.hvhn.backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -32,9 +33,11 @@ public class RequestViewMapper {
         map.put("latitude", request.getLatitude());
         map.put("longitude", request.getLongitude());
         map.put("address", request.getAddress());
+        map.put("location", request.getAddress());
         map.put("requiredBloodGroup", request.getRequiredBloodGroup());
         map.put("requiredSkill", request.getRequiredSkill());
         map.put("contactPhone", request.getContactPhone());
+        map.put("contact", request.getContactPhone());
         map.put("timeline", request.getTimeline());
         map.put("totalResponseTimeMinutes", request.getTotalResponseTimeMinutes());
         map.put("aiCategory", request.getAiCategory());
@@ -42,6 +45,7 @@ public class RequestViewMapper {
         map.put("aiSummary", request.getAiSummary());
         map.put("currentTier", request.getCurrentTier());
         map.put("viewCount", request.getViewCount());
+        map.put("views", request.getViewCount());
         map.put("responseCount", request.getResponseCount());
         map.put("volunteerProgressStatus", request.getVolunteerProgressStatus());
         map.put("requesterRatingPending", request.isRequesterRatingPending());
@@ -49,6 +53,9 @@ public class RequestViewMapper {
         map.put("volunteerRating", request.getVolunteerRating());
         map.put("volunteerFeedback", request.getVolunteerFeedback());
         map.put("createdAt", request.getCreatedAt() != null ? request.getCreatedAt().toString() : null);
+        map.put("createdAtEpochMs", request.getCreatedAt() != null
+                ? request.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                : null);
         map.put("acceptedAt", request.getAcceptedAt() != null ? request.getAcceptedAt().toString() : null);
         map.put("completedAt", request.getCompletedAt() != null ? request.getCompletedAt().toString() : null);
         map.put("volunteerStatusUpdatedAt", request.getVolunteerStatusUpdatedAt() != null
@@ -60,6 +67,7 @@ public class RequestViewMapper {
         }
 
         if (request.getRequesterId() != null) {
+            map.put("userId", request.getRequesterId());
             Map<String, Object> requester = new HashMap<>();
             requester.put("id", request.getRequesterId());
             requester.put("fullName", request.getRequesterName());

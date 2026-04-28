@@ -93,7 +93,14 @@ export default function Feed() {
   const loadRequests = async () => {
     try {
       const res = await apiService.getOpenRequests();
-      setRequests(res.data);
+      // Backend may return a paginated object ({ content: [...] }) — normalise defensively
+      const raw = res.data;
+      const items = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.content)
+          ? raw.content
+          : [];
+      setRequests(items);
     } catch (err) {
       console.error(err);
       showToast(err.message || 'Failed to load requests', 'error');
@@ -164,7 +171,7 @@ export default function Feed() {
   };
 
   const filtered = (() => {
-    let result = requests;
+    let result = Array.isArray(requests) ? requests : [];
     if (filter === 'SAVED') {
       result = result.filter((r) => isBookmarked(r.id));
     } else if (filter !== 'ALL') {
@@ -189,7 +196,7 @@ export default function Feed() {
         <Link to="/create" className="btn btn-primary">+ Raise Request</Link>
       </div>
 
-      {pinnedAnnouncements.filter(a => !dismissedAnnIds.includes(a.id)).map(ann => (
+      {(Array.isArray(pinnedAnnouncements) ? pinnedAnnouncements : []).filter(a => !dismissedAnnIds.includes(a.id)).map(ann => (
         <div 
           key={ann.id}
           className="animate-in mb-6 p-4 rounded-xl border-l-[6px] border-amber-400 bg-amber-50 shadow-sm flex items-center gap-4 group"
@@ -316,7 +323,7 @@ export default function Feed() {
                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           by {req.requester?.fullName || 'Anonymous'} 
                           <VerificationBadge level={req.requester?.verificationLevel || (req.requester?.verified ? 'VERIFIED' : 'BASIC')} size="sm" />
-                          • {timeAgo(req.createdAt)}
+                          • {timeAgo(req.createdAtEpochMs || req.createdAt)}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -343,7 +350,7 @@ export default function Feed() {
                       {req.address && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>📍 {req.address}</span>}
                       {req.community && <span style={{ fontSize: '0.85rem', color: 'var(--accent-secondary)' }}>🏘️ {req.community.name}</span>}
                       <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                        👁️ {req.viewCount} views
+                        👁️ {(req.viewCount ?? req.views ?? 0)} views
                       </span>
                     </div>
                     {req.aiSummary && (

@@ -50,7 +50,9 @@ export default function Login() {
 
     try {
       await login(email, password);
-      navigate('/feed');
+      // First-login redirect: go to profile setup if not completed yet
+      const setupDone = localStorage.getItem('hvhn_profile_setup_complete');
+      navigate(setupDone ? '/feed' : '/profile/edit');
     } catch (err) {
       setError(err.message || 'We could not sign you in with email and password.');
     } finally {
@@ -85,7 +87,9 @@ export default function Login() {
 
     try {
       await loginWithGoogle();
-      navigate('/feed');
+      // First-login redirect: go to profile setup if not completed yet
+      const setupDone = localStorage.getItem('hvhn_profile_setup_complete');
+      navigate(setupDone ? '/feed' : '/profile/edit');
     } catch (err) {
       setError(err.message || 'We could not sign you in with Google.');
     } finally {

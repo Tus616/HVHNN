@@ -82,6 +82,9 @@ public class HelpRequestService {
     }
 
     public HelpRequest createRequest(HelpRequestDTO dto, User requester) {
+        // Simple Gibberish Detection (Manual Heuristic to save AI resources)
+        validateRequestText(dto.getTitle(), dto.getDescription());
+
         // Apply Rate Limit: 2 requests per 5 seconds
         rateLimiterService.checkRateLimit(requester.getId(), 2, 5);
 
@@ -130,15 +133,25 @@ public class HelpRequestService {
         HelpRequest request = new HelpRequest();
         request.setAiFakeDetectionResult(fakeResult);
 
-        request.setTitle(dto.getTitle());
-        request.setDescription(dto.getDescription());
+        // Enforce basic validation
+        if (dto.getTitle() == null || dto.getTitle().isBlank()) {
+            throw new IllegalArgumentException("Request title is required");
+        }
+        if (dto.getDescription() == null || dto.getDescription().isBlank()) {
+            throw new IllegalArgumentException("Request description is required");
+        }
+
+        request.setTitle(dto.getTitle().trim());
+        request.setDescription(dto.getDescription().trim());
         request.setCategory(dto.getCategory());
-        request.setUrgency(dto.getUrgency());
-        if (request.getStatus() == null) request.setStatus("OPEN");
+        request.setUrgency(dto.getUrgency() != null ? dto.getUrgency().toUpperCase() : "MEDIUM");
+        request.setStatus("OPEN");
+        // Ensure createdAt is always present and JS-friendly (avoid long fractional seconds)
+        request.setCreatedAt(LocalDateTime.now().withNano(0));
         request.setLatitude(dto.getLatitude());
         request.setLongitude(dto.getLongitude());
-        request.setAddress(dto.getAddress());
-        request.setContactPhone(dto.getContactPhone());
+        request.setAddress((dto.getAddress() == null || dto.getAddress().isBlank()) ? requester.getAddress() : dto.getAddress());
+        request.setContactPhone((dto.getContactPhone() == null || dto.getContactPhone().isBlank()) ? requester.getPhone() : dto.getContactPhone());
         request.setRequesterId(requester.getId());
         request.setRequesterName(requester.getFullName());
         request.setCurrentTier(1);
@@ -261,9 +274,26 @@ public class HelpRequestService {
         return requestRepository.findByCategoryAndStatus(category, "OPEN");
     }
 
+    public List<HelpRequest> getRequestsByCommunity(String communityId) {
+        return requestRepository.findByCommunityId(communityId);
+    }
+
     public List<HelpRequest> getOpenRequests() {
         return requestRepository.findByStatus("OPEN")
                 .stream()
+                .sorted(Comparator
+                        .comparingInt((HelpRequest request) -> urgencyRank(request.getUrgency()))
+                        .thenComparing(HelpRequest::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+    }
+
+    /**
+     * Feed requests include newly raised OPEN requests plus already accepted/assigned ACTIVE requests.
+     * This allows the UI to show "active requests" even after a volunteer accepts a request.
+     */
+    public List<HelpRequest> getFeedRequests() {
+        List<HelpRequest> requests = requestRepository.findByStatusInOrderByCreatedAtDesc(List.of("OPEN", "ACTIVE"));
+        return requests.stream()
                 .sorted(Comparator
                         .comparingInt((HelpRequest request) -> urgencyRank(request.getUrgency()))
                         .thenComparing(HelpRequest::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
@@ -322,6 +352,43 @@ public class HelpRequestService {
         return requestRepository.save(request);
     }
 
+    public HelpRequest verifyRequestCompletion(String requestId, User user) {
+        HelpRequest request = requestRepository.findById(requestId)
+                .orElseThrow(() -> new RuntimeException("Request not found"));
+
+        if (!request.getRequesterId().equals(user.getId())) {
+            throw new IllegalArgumentException("Only the requester can verify completion.");
+        }
+        if (!"PENDING_COMPLETION".equals(request.getVolunteerProgressStatus())) {
+            throw new IllegalArgumentException("Request is not pending completion verification.");
+        }
+
+        request.setStatus("COMPLETED");
+        request.setVolunteerProgressStatus("COMPLETED");
+        request.setCompletedAt(LocalDateTime.now());
+        addTimelineEntry(request, "COMPLETION_VERIFIED", user.getFullName(), user.getId());
+        logger.info("Request {} completion verified by requester {}", requestId, user.getEmail());
+        return requestRepository.save(request);
+    }
+
+    public HelpRequest rejectRequestCompletion(String requestId, User user) {
+        HelpRequest request = requestRepository.findById(requestId)
+                .orElseThrow(() -> new RuntimeException("Request not found"));
+
+        if (!request.getRequesterId().equals(user.getId())) {
+            throw new IllegalArgumentException("Only the requester can reject completion.");
+        }
+        if (!"PENDING_COMPLETION".equals(request.getVolunteerProgressStatus())) {
+            throw new IllegalArgumentException("Request is not pending completion verification.");
+        }
+
+        request.setVolunteerProgressStatus("REACHED");
+        request.setStatus("ACTIVE");
+        addTimelineEntry(request, "COMPLETION_REJECTED", user.getFullName(), user.getId());
+        logger.info("Request {} completion rejected by requester {}, reverting to ACTIVE", requestId, user.getEmail());
+        return requestRepository.save(request);
+    }
+
     public void addTimelineEntry(HelpRequest request, String event, String actorName, String actorId) {
         if (request.getTimeline() == null) {
             request.setTimeline(new java.util.ArrayList<>());
@@ -337,6 +404,49 @@ public class HelpRequestService {
     private void setCommunitySnapshot(HelpRequest request, Community community) {
         request.setCommunityId(community.getId());
         request.setCommunityName(community.getName());
+    }
+
+    /**
+     * Simple gibberish detection to reject meaningless strings before they reach expensive AI models.
+     */
+    private void validateRequestText(String title, String description) {
+        if (isGibberish(title)) {
+            throw new RuntimeException("Invalid request: Please provide a meaningful title.");
+        }
+        if (isGibberish(description)) {
+            throw new RuntimeException("Invalid request: Please provide a meaningful description.");
+        }
+        if (description != null && description.trim().length() < 20) {
+            throw new RuntimeException("Request description is too short (min 20 characters).");
+        }
+    }
+
+    private boolean isGibberish(String text) {
+        if (text == null || text.isBlank()) return true;
+        String cleaned = text.trim().replaceAll("[^a-zA-Z\\s]", "");
+        if (cleaned.length() < 5) return true;
+
+        String[] words = cleaned.split("\\s+");
+        if (words.length < 2) return true;
+
+        String vowels = "aeiouAEIOU";
+        int gibberishWords = 0;
+        int significantWords = 0;
+
+        for (String word : words) {
+            if (word.length() <= 3) continue;
+            significantWords++;
+            int vowelCount = 0;
+            for (char c : word.toCharArray()) {
+                if (vowels.indexOf(c) != -1) vowelCount++;
+            }
+            double vowelRatio = (double) vowelCount / word.length();
+            // Most valid English words have at least one vowel and ratio > 15-20%
+            if (vowelRatio < 0.15) gibberishWords++;
+        }
+
+        if (significantWords > 0 && (double) gibberishWords / significantWords > 0.5) return true;
+        return false;
     }
 
     private int urgencyRank(String urgency) {

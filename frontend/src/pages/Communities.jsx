@@ -49,8 +49,8 @@ export default function Communities() {
         apiService.getCommunities(),
         apiService.getJoinedCommunities(user?.userId),
       ]);
-      setCommunities(commRes.data);
-      setJoinedIds(joinedRes.data);
+      setCommunities(Array.isArray(commRes.data) ? commRes.data : (commRes.data?.content || []));
+      setJoinedIds(Array.isArray(joinedRes.data) ? joinedRes.data : (joinedRes.data?.content || []));
     } catch (err) {
       console.error(err);
     } finally {
@@ -160,8 +160,8 @@ export default function Communities() {
   const handleLeave = async (communityId, communityName) => {
     try {
       await apiService.leaveCommunity(communityId, user?.userId);
-      setJoinedIds(joinedIds.filter(id => id !== communityId));
-      setCommunities(communities.map(c => c.id === communityId ? { ...c, memberCount: Math.max(0, c.memberCount - 1) } : c));
+      setJoinedIds((Array.isArray(joinedIds) ? joinedIds : []).filter(id => id !== communityId));
+      setCommunities((Array.isArray(communities) ? communities : []).map(c => c.id === communityId ? { ...c, memberCount: Math.max(0, c.memberCount - 1) } : c));
       showToastMsg(`Left ${communityName}.`);
     } catch (err) {
       showToastMsg(err.message || 'Failed to leave community.', 'error');
@@ -200,11 +200,13 @@ export default function Communities() {
       </div>
 
       <div className="feature-grid">
-        {communities
-          .filter(c => 
-            c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-            (c.location || c.address || '').toLowerCase().includes(searchQuery.toLowerCase())
-          ).length === 0 ? (
+        {(() => {
+          const filtered = (Array.isArray(communities) ? communities : [])
+            .filter(c =>
+              (c.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+              (c.location || c.address || '').toLowerCase().includes(searchQuery.toLowerCase())
+            );
+          if (filtered.length === 0) return (
             <EmptyState
               type="communities"
               title="No communities found"
@@ -212,59 +214,54 @@ export default function Communities() {
               actionLabel="Create a Community"
               onAction={() => setShowCreate(true)}
             />
-          ) : (
-            communities
-              .filter(c => 
-                c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                (c.location || c.address || '').toLowerCase().includes(searchQuery.toLowerCase())
-              )
-              .map(c => {
-                const isJoined = joinedIds.includes(c.id);
-                const type = (c.type || c.category || 'OTHER').toUpperCase();
-                return (
-                  <div key={c.id} className="card card-glass-lite" style={{ textAlign: 'center', borderColor: isJoined ? 'rgba(16, 185, 129, 0.3)' : undefined, position: 'relative' }}>
-                    {isJoined && (
-                      <div className="badge-joined-indicator" style={{ position: 'absolute', top: '12px', right: '12px', padding: '4px 10px', background: 'rgba(16,185,129,0.15)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--success)' }}>
-                        ✓ Joined
-                      </div>
-                    )}
-                    <div style={{ fontSize: '3rem', marginBottom: '16px', marginTop: '12px' }}>{TYPE_ICONS[type] || '🏛️'}</div>
-                    <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '8px' }}>{c.name}</h3>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '16px' }}>
-                      <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
-                        {type}
-                      </span>
-                      {c.requestCount > 0 && (
-                        <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', fontSize: '0.7rem' }}>
-                          🆘 {c.requestCount} active helps
-                        </span>
-                      )}
-                    </div>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '12px 0', minHeight: '3em' }}>{c.description}</p>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📍 {c.location || c.address}</div>
-                      <div>👥 {c.memberCount} member{c.memberCount !== 1 ? 's' : ''}</div>
-                    </div>
-                    {isJoined ? (
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <Link to={`/community/${c.id}`} className="btn btn-success btn-sm" style={{ flex: 1, justifyContent: 'center', textDecoration: 'none' }}>
-                          → Go to Community
-                        </Link>
-                        <button className="btn btn-danger btn-sm"
-                          onClick={() => handleLeave(c.id, c.name)} title="Leave Community">
-                          ✕
-                        </button>
-                      </div>
-                    ) : (
-                      <button className="btn btn-primary btn-sm" style={{ width: '100%', justifyContent: 'center' }}
-                        onClick={() => { setShowJoin(c); setVerificationCode(''); setJoinMode('code'); setEmailForOTP(''); setOtpCode(''); setOtpSent(false); }}>
-                        Join Community
-                      </button>
-                    )}
+          );
+          return filtered.map(c => {
+            const isJoined = (Array.isArray(joinedIds) ? joinedIds : []).includes(c.id);
+            const type = (c.type || c.category || 'OTHER').toUpperCase();
+            return (
+              <div key={c.id} className="card card-glass-lite" style={{ textAlign: 'center', borderColor: isJoined ? 'rgba(16, 185, 129, 0.3)' : undefined, position: 'relative' }}>
+                {isJoined && (
+                  <div className="badge-joined-indicator" style={{ position: 'absolute', top: '12px', right: '12px', padding: '4px 10px', background: 'rgba(16,185,129,0.15)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--success)' }}>
+                    ✓ Joined
                   </div>
-                );
-              })
-          )}
+                )}
+                <div style={{ fontSize: '3rem', marginBottom: '16px', marginTop: '12px' }}>{TYPE_ICONS[type] || '🏛️'}</div>
+                <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '8px' }}>{c.name}</h3>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '16px' }}>
+                  <span className="badge" style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                    {type}
+                  </span>
+                  {c.requestCount > 0 && (
+                    <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', fontSize: '0.7rem' }}>
+                      🆘 {c.requestCount} active helps
+                    </span>
+                  )}
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '12px 0', minHeight: '3em' }}>{c.description}</p>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📍 {c.location || c.address}</div>
+                  <div>👥 {c.memberCount} member{c.memberCount !== 1 ? 's' : ''}</div>
+                </div>
+                {isJoined ? (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <Link to={`/community/${c.id}`} className="btn btn-success btn-sm" style={{ flex: 1, justifyContent: 'center', textDecoration: 'none' }}>
+                      → Go to Community
+                    </Link>
+                    <button className="btn btn-danger btn-sm"
+                      onClick={() => handleLeave(c.id, c.name)} title="Leave Community">
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <button className="btn btn-primary btn-sm" style={{ width: '100%', justifyContent: 'center' }}
+                    onClick={() => { setShowJoin(c); setVerificationCode(''); setJoinMode('code'); setEmailForOTP(''); setOtpCode(''); setOtpSent(false); }}>
+                    Join Community
+                  </button>
+                )}
+              </div>
+            );
+          });
+        })()}
       </div>
 
 

@@ -8,6 +8,35 @@ import { VOLUNTEER_SKILL_OPTIONS } from '../utils/volunteer';
 import VoiceRecorder from '../components/VoiceRecorder';
 import communityImage from '../assets/community.png';
 
+// ---- AI Input Validation: Reject gibberish/meaningless text ----
+function isGibberish(text) {
+  if (!text || typeof text !== 'string') return true;
+  const cleaned = text.trim().replace(/[^a-zA-Z\s]/g, '');
+  if (cleaned.length < 5) return true;
+  const words = cleaned.split(/\s+/).filter(w => w.length > 0);
+  if (words.length < 2) return true;
+  const vowels = 'aeiouAEIOU';
+  let gibberishWords = 0;
+  for (const word of words) {
+    if (word.length < 2) continue;
+    const vowelCount = [...word].filter(c => vowels.includes(c)).length;
+    const vowelRatio = vowelCount / word.length;
+    // Real words typically have >= 25% vowels
+    if (vowelRatio < 0.15 && word.length > 3) gibberishWords++;
+  }
+  // If more than half the significant words are gibberish, reject
+  const significantWords = words.filter(w => w.length > 3);
+  if (significantWords.length > 0 && gibberishWords / significantWords.length > 0.5) return true;
+  return false;
+}
+
+function validateRequestInput(title, description) {
+  if (isGibberish(title)) return 'Invalid request: Please enter a meaningful title.';
+  if (isGibberish(description)) return 'Invalid request: Please enter a meaningful description.';
+  if (description.trim().length < 20) return 'Description must be at least 20 characters.';
+  return null;
+}
+
 
 
 const CATEGORIES = [
@@ -131,6 +160,14 @@ export default function CreateRequest() {
   async function handleSubmit(event) {
     event.preventDefault();
     setError('');
+
+    // AI Input Validation: block gibberish before sending to backend
+    const validationError = validateRequestInput(form.title, form.description);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -141,6 +178,7 @@ export default function CreateRequest() {
       setSuccess(true);
       setTimeout(() => navigate(form.communityId ? `/community/${form.communityId}` : '/feed'), 1500);
     } catch (err) {
+      console.error('Failed to create request:', err);
       setError(err.message || 'Failed to create request.');
     } finally {
       setLoading(false);

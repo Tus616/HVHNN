@@ -1,5 +1,6 @@
 package com.hvhn.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -79,7 +80,7 @@ public class HelpRequest {
     private int shareCount = 0;
 
     @CreatedDate
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt;
 
     private LocalDateTime acceptedAt;
     private LocalDateTime completedAt;
@@ -199,6 +200,19 @@ public class HelpRequest {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    // Backward/alternate JSON field names expected by some clients
+    @JsonProperty("location")
+    public String getLocation() { return address; }
+
+    @JsonProperty("contact")
+    public String getContact() { return contactPhone; }
+
+    @JsonProperty("views")
+    public int getViews() { return viewCount; }
+
+    @JsonProperty("userId")
+    public String getUserId() { return requesterId; }
 
     public LocalDateTime getAcceptedAt() { return acceptedAt; }
     public void setAcceptedAt(LocalDateTime acceptedAt) { this.acceptedAt = acceptedAt; }

@@ -71,7 +71,7 @@ export default function AdminRequestsPage() {
         await adminApi.closeRequest(request.id);
         setRequestPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === request.id ? { ...entry, status: 'RESOLVED' } : entry
           )),
         }));
@@ -80,7 +80,7 @@ export default function AdminRequestsPage() {
         await adminApi.flagRequest(request.id);
         setRequestPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === request.id ? { ...entry, flagged: true } : entry
           )),
         }));

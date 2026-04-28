@@ -67,9 +67,12 @@ function resolveAttachmentUrl(url) {
 }
 
 function mergeMessages(existingMessages, nextMessages, mode = 'append') {
+  const safeExisting = Array.isArray(existingMessages) ? existingMessages : [];
+  const safeNext = Array.isArray(nextMessages) ? nextMessages : [];
+  
   const ordered = mode === 'prepend'
-    ? [...nextMessages, ...existingMessages]
-    : [...existingMessages, ...nextMessages];
+    ? [...safeNext, ...safeExisting]
+    : [...safeExisting, ...safeNext];
 
   const seen = new Set();
   return ordered.filter((message) => {
@@ -161,7 +164,7 @@ export default function ChatWindow({
   }, [room?.id]);
 
   useEffect(() => {
-    if (!liveMessages.length) return;
+    if (!Array.isArray(liveMessages) || !liveMessages.length) return;
     setMessages((current) => mergeMessages(current, liveMessages));
   }, [liveMessages]);
 
@@ -380,7 +383,7 @@ export default function ChatWindow({
     if (!messageToDelete) return;
     try {
       if (onDeleteMessage) await onDeleteMessage(messageToDelete);
-      setMessages(prev => prev.filter(m => m.id !== messageToDelete));
+      setMessages(prev => (Array.isArray(prev) ? prev : []).filter(m => m.id !== messageToDelete));
     } catch (err) {
       console.error("Failed to delete", err);
     } finally {
@@ -409,7 +412,7 @@ export default function ChatWindow({
       </div>
 
       <div style={{ padding: '0 24px' }}>
-        <TypingIndicator users={typingUsers.filter((user) => user.userId !== currentUserId)} />
+        <TypingIndicator users={(Array.isArray(typingUsers) ? typingUsers : []).filter((user) => user.userId !== currentUserId)} />
       </div>
 
       {replyTarget && (

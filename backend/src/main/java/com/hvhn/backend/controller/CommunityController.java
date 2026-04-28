@@ -29,12 +29,15 @@ import java.util.NoSuchElementException;
 public class CommunityController {
 
     private final CommunityService communityService;
-    private final com.hvhn.backend.repository.HelpRequestRepository helpRequestRepository;
+    private final com.hvhn.backend.service.HelpRequestService helpRequestService;
+    private final com.hvhn.backend.service.RequestViewMapper requestViewMapper;
 
     public CommunityController(CommunityService communityService, 
-                               com.hvhn.backend.repository.HelpRequestRepository helpRequestRepository) {
+                               com.hvhn.backend.service.HelpRequestService helpRequestService,
+                               com.hvhn.backend.service.RequestViewMapper requestViewMapper) {
         this.communityService = communityService;
-        this.helpRequestRepository = helpRequestRepository;
+        this.helpRequestService = helpRequestService;
+        this.requestViewMapper = requestViewMapper;
     }
 
     @GetMapping
@@ -142,8 +145,17 @@ public class CommunityController {
             @RequestParam(required = false) String urgency,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String location,
-            @RequestParam(required = false) String search
+            @RequestParam(required = false) String search,
+            @AuthenticationPrincipal User currentUser
     ) {
+        if (currentUser == null) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+
+        // Check membership
+        if (!communityService.isMember(id, currentUser.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "Only community members can view requests");
+        }
         // Fetch legacy requests
         List<Request> legacyRequests = communityService.getRequests(
                 id,
@@ -154,12 +166,12 @@ public class CommunityController {
         );
         
         // Fetch new unified requests
-        List<com.hvhn.backend.model.HelpRequest> unifiedRequests = helpRequestRepository.findByCommunityId(id);
+        List<com.hvhn.backend.model.HelpRequest> unifiedRequests = helpRequestService.getRequestsByCommunity(id);
         
         // Combine them
         List<Map<String, Object>> combined = new ArrayList<>();
         combined.addAll(legacyRequests.stream().map(this::mapRequest).toList());
-        combined.addAll(unifiedRequests.stream().map(this::mapHelpRequest).toList());
+        combined.addAll(unifiedRequests.stream().map(requestViewMapper::toRequestMap).toList());
         
         // Sort by date (descending)
         combined.sort((a, b) -> {
@@ -173,30 +185,25 @@ public class CommunityController {
         return ResponseEntity.ok(combined);
     }
 
-    private Map<String, Object> mapHelpRequest(com.hvhn.backend.model.HelpRequest request) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", request.getId());
-        response.put("communityId", request.getCommunityId());
-        response.put("title", request.getTitle());
-        response.put("description", request.getDescription());
-        response.put("location", request.getAddress());
-        response.put("urgency", request.getUrgency());
-        response.put("status", request.getStatus());
-        response.put("requestedBy", request.getRequesterId());
-        response.put("requesterName", request.getRequesterName());
-        response.put("createdAt", request.getCreatedAt() != null ? request.getCreatedAt().toString() : null);
-        response.put("isUnified", true);
-        return response;
-    }
-
     @PostMapping("/{id}/requests")
     public ResponseEntity<Map<String, Object>> createCommunityRequest(
             @PathVariable String id,
             @Valid @RequestBody CommunityRequestCreateRequest request,
             @AuthenticationPrincipal User currentUser
     ) {
-        Request createdRequest = communityService.createRequest(id, request, currentUser);
-        return ResponseEntity.status(HttpStatus.CREATED).body(mapRequest(createdRequest));
+        com.hvhn.backend.dto.HelpRequestDTO unifiedDto = new com.hvhn.backend.dto.HelpRequestDTO();
+        unifiedDto.setTitle(request.getTitle());
+        unifiedDto.setDescription(request.getDescription());
+        unifiedDto.setAddress(request.getLocation());
+        unifiedDto.setUrgency(request.getUrgency() != null ? request.getUrgency().name() : "MEDIUM");
+        unifiedDto.setCommunityId(id);
+        
+        if (currentUser == null) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user required");
+        }
+
+        com.hvhn.backend.model.HelpRequest helpRequest = helpRequestService.createRequest(unifiedDto, currentUser);
+        return ResponseEntity.status(HttpStatus.CREATED).body(requestViewMapper.toRequestMap(helpRequest));
     }
 
     private Map<String, Object> mapCommunity(Community community) {

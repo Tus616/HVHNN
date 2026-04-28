@@ -10,13 +10,14 @@ import { timeAgo } from '../utils/timeUtils';
 import VolunteerNavigationMap from '../components/volunteer/VolunteerNavigationMap';
 
 const URGENCY_CLASS = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low' };
-const STATUS_CLASS = { OPEN: 'badge-status-open', ACCEPTED: 'badge-status-accepted', ACTIVE: 'badge-status-accepted', COMPLETED: 'badge-status-completed', CANCELLED: 'badge-status-cancelled' };
+const STATUS_CLASS = { OPEN: 'badge-status-open', ACCEPTED: 'badge-status-accepted', ACTIVE: 'badge-status-accepted', PENDING_COMPLETION: 'badge-status-accepted', COMPLETED: 'badge-status-completed', CANCELLED: 'badge-status-cancelled' };
 const CATEGORY_ICONS = { BLOOD_DONATION: '🩸', MEDICAL: '🏥', FOOD: '🍲', TRANSPORT: '🚗', EMERGENCY: '🚨', GENERAL: '📋' };
 
 const STATUS_STEPS = [
   { key: 'ASSIGNED', label: 'Assigned', icon: '✓' },
   { key: 'ON_THE_WAY', label: 'On the Way', icon: '🚗' },
   { key: 'REACHED', label: 'Reached', icon: '📍' },
+  { key: 'PENDING_COMPLETION', label: 'Awaiting Verification', icon: '🔍' },
   { key: 'COMPLETED', label: 'Completed', icon: '✅' },
 ];
 
@@ -26,6 +27,9 @@ const EVENT_META = {
   VOLUNTEER_ACCEPTED: { icon: '🤝', label: 'Volunteer Accepted', color: 'green' },
   ON_THE_WAY: { icon: '🚗', label: 'On the Way', color: 'green' },
   REACHED: { icon: '📍', label: 'Reached Location', color: 'green' },
+  PENDING_COMPLETION: { icon: '🔍', label: 'Awaiting Requester Verification', color: 'blue' },
+  COMPLETION_VERIFIED: { icon: '✅', label: 'Completion Verified by Requester', color: 'green' },
+  COMPLETION_REJECTED: { icon: '🔄', label: 'Completion Rejected — Back to Active', color: 'red' },
   COMPLETED: { icon: '✅', label: 'Request Completed', color: 'green' },
   EXPIRED: { icon: '⏲️', label: 'Request Expired', color: 'red' },
   CANCELLED: { icon: '❌', label: 'Request Cancelled', color: 'red' },
@@ -48,6 +52,8 @@ export default function RequestDetail() {
 
   // Rating
   const [showRating, setShowRating] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [ratingFeedback, setRatingFeedback] = useState('');
   const [ratingLoading, setRatingLoading] = useState(false);
   
   // AI Suggestions
@@ -59,7 +65,7 @@ export default function RequestDetail() {
   const loadRequest = async () => {
     try {
       const res = await apiService.getRequestById(id);
-      setRequest(res.data);
+      setRequest(res.data || null);
 
       // Check if rating pending
       if (res.data.requesterRatingPending && !res.data.requesterRated && res.data.requester?.id === user?.userId) {
@@ -86,7 +92,7 @@ export default function RequestDetail() {
     setAiLoading(true);
     try {
       const res = await apiService.ai.getResponseSuggestion(request, user);
-      setAiSuggestion(res.data);
+      setAiSuggestion(res.data || null);
     } catch (err) {
       console.warn('AI suggestion failed:', err);
     } finally {
@@ -157,13 +163,42 @@ export default function RequestDetail() {
 
   const handleComplete = async () => {
     try {
-      await apiService.completeRequest(id);
-      showToast('Request marked as completed! +50 points earned! 🏆');
-      notifyRequestCompleted(request);
-      notifyPoints(50, 'completing a help request');
+      // Volunteer marks as PENDING_COMPLETION — requester must verify
+      if (isVolunteer) {
+        await apiService.updateVolunteerRequestStatus(id, 'PENDING_COMPLETION', user);
+        showToast('Completion submitted! Waiting for requester to verify. 🔍');
+      } else {
+        // Requester can also mark as completed directly
+        await apiService.completeRequest(id);
+        showToast('Request marked as completed! 🏆');
+        notifyRequestCompleted(request);
+        notifyPoints(50, 'completing a help request');
+      }
       loadRequest();
     } catch (err) {
       showToast(err.message || 'Failed to complete', 'error');
+    }
+  };
+
+  const handleVerifyComplete = async () => {
+    try {
+      await apiService.verifyRequestCompletion(id, user);
+      showToast('Request verified as completed! Thank you! ✅🏆');
+      notifyRequestCompleted(request);
+      notifyPoints(50, 'verified completion');
+      loadRequest();
+    } catch (err) {
+      showToast(err.message || 'Failed to verify completion', 'error');
+    }
+  };
+
+  const handleRejectComplete = async () => {
+    try {
+      await apiService.rejectRequestCompletion(id, user);
+      showToast('Completion rejected. Request is back to active. 🔄');
+      loadRequest();
+    } catch (err) {
+      showToast(err.message || 'Failed to reject completion', 'error');
     }
   };
 
@@ -202,7 +237,8 @@ export default function RequestDetail() {
 
   const isRequester = String(request.requester?.id) === String(user?.userId);
   const isVolunteer = String(request.volunteer?.id) === String(user?.userId);
-  const displayStatus = request.status === 'ACCEPTED' ? 'ACTIVE' : request.status;
+  const isPendingCompletion = request.volunteerProgressStatus === 'PENDING_COMPLETION';
+  const displayStatus = isPendingCompletion ? 'PENDING_COMPLETION' : (request.status === 'ACCEPTED' ? 'ACTIVE' : request.status);
   const currentProgress = request.volunteerProgressStatus || (request.status === 'ACTIVE' ? 'ASSIGNED' : null);
 
   return (
@@ -294,19 +330,19 @@ export default function RequestDetail() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div className="card" style={{ padding: '16px' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>📍 Location</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.address || 'Not specified'}</div>
+                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.address || request.location || 'Not specified'}</div>
               </div>
               <div className="card" style={{ padding: '16px' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>📞 Contact</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.contactPhone || 'Not specified'}</div>
+                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.contactPhone || request.contact || request.requester?.phone || 'Not specified'}</div>
               </div>
               <div className="card" style={{ padding: '16px' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>👁️ Views</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.viewCount} views • {request.responseCount} responses</div>
+                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{(request.viewCount ?? request.views ?? 0)} views • {(request.responseCount ?? request.responses ?? 0)} responses</div>
               </div>
               <div className="card" style={{ padding: '16px' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>🕐 Posted</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.createdAt ? new Date(request.createdAt).toLocaleString() : '-'}</div>
+                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{(request.createdAtEpochMs || request.createdAt || request.created_at || request.createdOn) ? new Date(request.createdAtEpochMs || request.createdAt || request.created_at || request.createdOn).toLocaleString() : '-'}</div>
               </div>
             </div>
           </div>
@@ -510,7 +546,7 @@ export default function RequestDetail() {
                     <div style={{ fontSize: '0.7rem', background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
                       🕒 Reach in {aiSuggestion.estimated_time_to_reach}
                     </div>
-                    {aiSuggestion.safety_tips?.slice(0, 1).map((tip, i) => (
+                    {Array.isArray(aiSuggestion.safety_tips) && aiSuggestion.safety_tips.slice(0, 1).map((tip, i) => (
                       <div key={i} style={{ fontSize: '0.7rem', background: 'rgba(239,68,68,0.05)', padding: '2px 8px', borderRadius: '4px', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.1)' }}>
                         ⚠️ {tip}
                       </div>
@@ -537,17 +573,50 @@ export default function RequestDetail() {
                   </div>
                 </>
               )}
-              {(displayStatus === 'ACTIVE') && isVolunteer && request.volunteerProgressStatus !== 'COMPLETED' && request.latitude && request.longitude && (
+              {(displayStatus === 'ACTIVE') && isVolunteer && request.volunteerProgressStatus !== 'COMPLETED' && request.volunteerProgressStatus !== 'PENDING_COMPLETION' && request.latitude && request.longitude && (
                 <button className="btn btn-primary" onClick={() => setActiveMapRequest(request)} style={{ width: '100%', justifyContent: 'center' }}>
                   📍 Show Navigation Map
                 </button>
               )}
-              {(displayStatus === 'ACTIVE') && (isRequester || isVolunteer) && (
+              {(displayStatus === 'ACTIVE') && isVolunteer && request.volunteerProgressStatus !== 'COMPLETED' && request.volunteerProgressStatus !== 'PENDING_COMPLETION' && (
                 <button className="btn btn-success" onClick={handleComplete} style={{ width: '100%', justifyContent: 'center' }}>
                   ✅ Mark as Completed
                 </button>
               )}
-              {(request.status === 'OPEN' || displayStatus === 'ACTIVE') && isRequester && (
+
+              {/* Pending Completion — Volunteer sees waiting state */}
+              {isPendingCompletion && isVolunteer && (
+                <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: '8px' }}>🔍</div>
+                  <div style={{ fontWeight: 700, color: 'var(--accent-primary)', marginBottom: '4px' }}>Awaiting Verification</div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>The requester needs to confirm that the help was received.</div>
+                </div>
+              )}
+
+              {/* Pending Completion — Requester sees verification buttons */}
+              {isPendingCompletion && isRequester && (
+                <div style={{ padding: '16px', background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '1.3rem' }}>🔍</span>
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Verify Completion</div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        <strong>{request.volunteer?.fullName}</strong> has marked this request as completed. Was the help received?
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-success" onClick={handleVerifyComplete} style={{ flex: 1, justifyContent: 'center' }}>
+                      ✅ Yes, Completed
+                    </button>
+                    <button className="btn btn-danger" onClick={handleRejectComplete} style={{ flex: 1, justifyContent: 'center' }}>
+                      ❌ Not Yet
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {(request.status === 'OPEN' || (displayStatus === 'ACTIVE' && !isPendingCompletion)) && isRequester && (
                 <button className="btn btn-danger" onClick={handleCancel} style={{ width: '100%', justifyContent: 'center' }}>
                   ❌ Cancel Request
                 </button>

@@ -14,8 +14,19 @@ const USE_MOCK_USERS = import.meta.env.VITE_USE_MOCK_USERS === 'true';
 
 export const AUTH_USES_MOCK = USE_MOCK_AUTH;
 
+function resolveApiBaseUrl() {
+  const runtimeUrl = typeof window !== 'undefined' ? window.__HVHN_CONFIG__?.API_URL : null;
+  const envUrl = import.meta.env.VITE_API_URL;
+
+  // In development we rely on Vite proxy if no explicit URL is set.
+  if (import.meta.env.DEV) return runtimeUrl || envUrl || '/api';
+
+  // In production there is no Vite proxy. Prefer runtime config, then build-time env.
+  return runtimeUrl || envUrl || '/api';
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: resolveApiBaseUrl(),
   headers: { 'Content-Type': 'application/json' }
 });
 
@@ -676,7 +687,7 @@ function ensureSessionMemberInDirectory(communityId, user) {
   const community = mockCommunities.find((entry) => entry.id === communityId);
   if (!community || !user) return;
 
-  if (!communityMemberDirectory[communityId]) {
+  if (!Array.isArray(communityMemberDirectory[communityId])) {
     communityMemberDirectory[communityId] = [];
   }
 
@@ -716,7 +727,8 @@ function removeSessionMemberFromDirectory(communityId, user) {
   const email = String(user.email || '').toLowerCase();
   const fullName = String(user.fullName || '').trim().toLowerCase();
 
-  communityMemberDirectory[communityId] = communityMemberDirectory[communityId].filter((member) => {
+  const directory = Array.isArray(communityMemberDirectory[communityId]) ? communityMemberDirectory[communityId] : [];
+  communityMemberDirectory[communityId] = directory.filter((member) => {
     const memberId = String(member.id || '');
     const memberEmail = String(member.email || '').toLowerCase();
     const memberName = String(member.fullName || '').trim().toLowerCase();
@@ -1151,6 +1163,9 @@ const mockApi = {
         request.requesterRatingPending = true;
         request.requesterRated = false;
         volunteer.points = (volunteer.points || 0) + 50;
+      } else if (normalizedStatus === 'PENDING_COMPLETION') {
+        // Keep status as ACTIVE, just set progress to PENDING_COMPLETION
+        request.status = 'ACTIVE';
       } else {
         request.status = 'ACTIVE';
       }
@@ -1163,6 +1178,42 @@ const mockApi = {
         respondedAt: new Date().toISOString(),
         completedAt: normalizedStatus === 'COMPLETED' ? new Date().toISOString() : undefined,
       });
+      return { data: syncMockRequestShape(request) };
+    },
+    verifyCompletion: async (requestId, user) => {
+      const request = findMockRequestById(requestId);
+      if (!request) throw new Error('Request not found.');
+      if (String(request.requester?.id) !== String(user?.userId || user?.id)) throw new Error('Only the requester can verify completion.');
+      if (request.volunteerProgressStatus !== 'PENDING_COMPLETION') throw new Error('Request is not pending completion verification.');
+
+      request.status = 'COMPLETED';
+      request.volunteerProgressStatus = 'COMPLETED';
+      request.completedAt = new Date().toISOString();
+      request.requesterRatingPending = true;
+      request.requesterRated = false;
+
+      const volunteer = findMockUserById(request.volunteer?.id);
+      if (volunteer) {
+        volunteer.points = (volunteer.points || 0) + 50;
+        ensureMockVolunteerMeta(volunteer);
+      }
+
+      upsertMockRequestAssignment({
+        requestId,
+        volunteerId: request.volunteer?.id,
+        status: 'COMPLETED',
+        completedAt: new Date().toISOString(),
+      });
+      return { data: syncMockRequestShape(request) };
+    },
+    rejectCompletion: async (requestId, user) => {
+      const request = findMockRequestById(requestId);
+      if (!request) throw new Error('Request not found.');
+      if (String(request.requester?.id) !== String(user?.userId || user?.id)) throw new Error('Only the requester can reject completion.');
+      if (request.volunteerProgressStatus !== 'PENDING_COMPLETION') throw new Error('Request is not pending completion verification.');
+
+      request.volunteerProgressStatus = 'REACHED';
+      request.status = 'ACTIVE';
       return { data: syncMockRequestShape(request) };
     },
     rate: async ({ requestId, volunteerId, rating, feedback }, userId) => {
@@ -1336,8 +1387,8 @@ const mockApi = {
     },
     getMembers: async (communityId) => {
       await new Promise(r => setTimeout(r, 300));
-      const mc = mockCommunityMembers[communityId] || [];
-      return { data: mc };
+      const mc = communityMemberDirectory[communityId] || [];
+      return { data: Array.isArray(mc) ? mc : [] };
     },
   },
 };
@@ -1355,11 +1406,17 @@ const apiService = {
   sendOtp: (email) => USE_MOCK_AUTH ? mockApi.auth.sendOtp(email) : api.post('/auth/send-otp', { email }),
   verifyOtp: (email, otp) => USE_MOCK_AUTH ? mockApi.auth.verifyOtp(email, otp) : api.post('/auth/verify-otp', { email, otp }),
 
-  getOpenRequests: () => USE_MOCK ? mockApi.requests.getOpen() : api.get('/requests/open'),
-  getAllRequests: () => USE_MOCK ? mockApi.requests.getAll() : api.get('/requests'),
+  // Help Feed: use the default backend endpoint (/api/requests) which returns OPEN + ACTIVE.
+  getOpenRequests: () => USE_MOCK
+    ? mockApi.requests.getOpen()
+    : api.get('/requests').then(res => {
+        const raw = res.data;
+        return { ...res, data: Array.isArray(raw) ? raw : Array.isArray(raw?.content) ? raw.content : [] };
+      }),
+  getAllRequests: () => USE_MOCK ? mockApi.requests.getAll() : api.get('/requests').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
   getRequestById: (id) => USE_MOCK ? mockApi.requests.getById(id) : api.get(`/requests/${id}`),
-  getMyRequests: (userId) => USE_MOCK ? mockApi.requests.getMy(userId) : api.get('/requests/my'),
-  getVolunteeredRequests: (userId) => USE_MOCK ? mockApi.requests.getVolunteered(userId) : api.get('/requests/volunteered'),
+  getMyRequests: (userId) => USE_MOCK ? mockApi.requests.getMy(userId) : api.get('/requests/my').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
+  getVolunteeredRequests: (userId) => USE_MOCK ? mockApi.requests.getVolunteered(userId) : api.get('/requests/volunteered').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
   createRequest: (data, user) => USE_MOCK ? mockApi.requests.create(data, user) : api.post('/requests', data),
   
   // Verification endpoints
@@ -1370,6 +1427,8 @@ const apiService = {
   acceptRequest: (id, user) => USE_MOCK ? mockApi.requests.accept(id, user) : api.post(`/requests/${id}/accept`),
   completeRequest: (id, user) => USE_MOCK ? mockApi.requests.complete(id, user) : api.post(`/requests/${id}/complete`),
   cancelRequest: (id) => USE_MOCK ? mockApi.requests.cancel(id) : api.post(`/requests/${id}/cancel`),
+  verifyRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.verifyCompletion(id, user) : api.post(`/requests/${id}/verify-complete`),
+  rejectRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.rejectCompletion(id, user) : api.post(`/requests/${id}/reject-complete`),
   getRequestTimeline: (id) => api.get(`/requests/${id}/timeline`),
   getPublicRequest: (id) => USE_MOCK ? mockApi.requests.getPublic(id) : api.get(`/requests/public/${id}`),
 
@@ -1377,8 +1436,8 @@ const apiService = {
   updateProfile: (data) => api.put('/users/me', data),
   updateSkills: (skills) => api.put('/users/skills', { skills }),
   updateEmergencyContacts: (contacts) => api.put('/users/emergency-contacts', { contacts }),
-  getLeaderboard: () => USE_MOCK_USERS ? mockApi.users.getLeaderboard() : api.get('/users/leaderboard'),
-  getUserImpact: () => USE_MOCK_USERS ? mockApi.users.getImpact() : api.get('/users/impact'),
+  getLeaderboard: () => USE_MOCK_USERS ? mockApi.users.getLeaderboard() : api.get('/users/leaderboard').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getUserImpact: () => USE_MOCK_USERS ? mockApi.users.getImpact() : api.get('/users/impact').then(res => ({ ...res, data: res.data || {} })),
   updateVolunteerSchedule: (userId, data) => USE_MOCK_USERS ? mockApi.users.updateSchedule(userId, data) : api.put('/users/volunteer/schedule', data),
 
   toggleVolunteer: (userId, isVolunteer) => USE_MOCK
@@ -1424,13 +1483,14 @@ const apiService = {
     ? mockApi.volunteer.getStats(userId)
     : api.get('/volunteer/stats'),
 
-  getCommunities: () => USE_MOCK ? mockApi.communities.getAll() : api.get('/communities'),
+  getCommunities: () => USE_MOCK ? mockApi.communities.getAll() : api.get('/communities').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
   getCommunityDetail: (id) => USE_MOCK ? mockApi.communities.getDetail(id) : api.get(`/communities/${id}`),
   getJoinedCommunities: async (userId) => {
     if (USE_MOCK) return mockApi.communities.getJoined(userId);
     try {
       const res = await api.get('/communities');
-      const joinedIds = res.data.filter(c => c.memberIds && c.memberIds.includes(userId)).map(c => c.id);
+      const data = Array.isArray(res.data) ? res.data : [];
+      const joinedIds = data.filter(c => c.memberIds && c.memberIds.includes(userId)).map(c => c.id);
       return { data: joinedIds };
     } catch (err) {
       return { data: [] };
@@ -1459,22 +1519,22 @@ const apiService = {
   deleteCommunity: (communityId) => USE_MOCK ? mockApi.communityManage.delete(communityId) : api.delete(`/communities/${communityId}`),
   removeCommunityMember: (communityId, memberId) => USE_MOCK ? mockApi.communityManage.removeMember(communityId, memberId) : api.delete(`/communities/${communityId}/members/${memberId}`),
   broadcastMessage: (communityId, content) => api.post(`/communities/${communityId}/broadcast`, { content }),
-  getCommunityMembers: (communityId) => USE_MOCK ? mockApi.communityManage.getMembers(communityId) : api.get(`/communities/${communityId}/members`),
-  getCommunityRequests: (communityId) => api.get(`/communities/${communityId}/requests`),
+  getCommunityMembers: (communityId) => USE_MOCK ? mockApi.communityManage.getMembers(communityId) : api.get(`/communities/${communityId}/members`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getCommunityRequests: (communityId) => api.get(`/communities/${communityId}/requests`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   createCommunityRequest: (communityId, data) => api.post(`/communities/${communityId}/requests`, data),
 
   getDashboardStats: () => USE_MOCK ? mockApi.admin.getDashboard() : api.get('/admin/dashboard'),
-  getAdminRequests: () => USE_MOCK ? mockApi.admin.getRequests() : api.get('/admin/requests'),
-  getAdminUsers: () => USE_MOCK ? mockApi.admin.getUsers() : api.get('/admin/users'),
-  getPendingTrusted: () => USE_MOCK ? mockApi.admin.getPendingTrusted() : api.get('/admin/pending-trusted'),
+  getAdminRequests: () => USE_MOCK ? mockApi.admin.getRequests() : api.get('/admin/requests').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getAdminUsers: () => USE_MOCK ? mockApi.admin.getUsers() : api.get('/admin/users').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getPendingTrusted: () => USE_MOCK ? mockApi.admin.getPendingTrusted() : api.get('/admin/pending-trusted').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   promoteToTrusted: (userId) => USE_MOCK ? mockApi.admin.promoteToTrusted(userId) : api.put(`/admin/users/${userId}/verify-trusted`),
-  getFlaggedRequests: () => USE_MOCK ? mockApi.admin.getFlaggedRequests() : api.get('/admin/flagged'),
+  getFlaggedRequests: () => USE_MOCK ? mockApi.admin.getFlaggedRequests() : api.get('/admin/flagged').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   reviewRequest: (requestId, status) => USE_MOCK 
     ? mockApi.admin.reviewRequest(requestId, status) 
     : api.put(`/admin/requests/${requestId}/review`, { status }),
 
-  getChatRooms: () => api.get('/chat/rooms'),
-  getChatHistory: (roomId, page = 0, size = 50) => api.get(`/chat/${roomId}/history`, { params: { page, size } }),
+  getChatRooms: () => api.get('/chat/rooms').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getChatHistory: (roomId, page = 0, size = 50) => api.get(`/chat/${roomId}/history`, { params: { page, size } }).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   createDirectChatRoom: (payload) => api.post('/chat/rooms/direct', payload),
   createGroupChatRoom: (payload) => api.post('/chat/rooms/group', payload),
   markChatMessageRead: (messageId) => api.put(`/chat/${messageId}/read`),
@@ -1491,11 +1551,11 @@ const apiService = {
   getOnlineUsers: () => api.get('/presence/online-users'),
 
   // Announcements
-  getAnnouncements: (communityId) => USE_MOCK ? mockApi.announcements.getByCommunity(communityId) : api.get(`/community/${communityId}/announcements`),
+  getAnnouncements: (communityId) => USE_MOCK ? mockApi.announcements.getByCommunity(communityId) : api.get(`/community/${communityId}/announcements`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   createAnnouncement: (communityId, data) => USE_MOCK ? mockApi.announcements.create(communityId, data) : api.post(`/community/${communityId}/announcements`, data),
   deleteAnnouncement: (communityId, announcementId) => USE_MOCK ? mockApi.announcements.delete(communityId, announcementId) : api.delete(`/community/${communityId}/announcements/${announcementId}`),
   togglePinAnnouncement: (communityId, announcementId) => USE_MOCK ? mockApi.announcements.togglePin(communityId, announcementId) : api.put(`/community/${communityId}/announcements/${announcementId}/pin`),
-  getPinnedAnnouncements: () => USE_MOCK ? mockApi.announcements.getPinned() : api.get('/community/announcements/pinned'),
+  getPinnedAnnouncements: () => USE_MOCK ? mockApi.announcements.getPinned() : api.get('/community/announcements/pinned').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
 
   // HVHN-AI Engine
   processAiRequest: (payload) => api.post('/ai/process', payload),

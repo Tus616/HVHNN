@@ -247,26 +247,28 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
 }
 
 function applyCommunityScope(records, user, selector) {
-  if (!isCommunityAdmin(user)) return records;
+  const safeRecords = Array.isArray(records) ? records : [];
+  if (!isCommunityAdmin(user)) return safeRecords;
 
   const scopedCommunityId = getScopedCommunityId(
     user,
-    records[0]?.communityId || records[0]?.id || ''
+    safeRecords[0]?.communityId || safeRecords[0]?.id || ''
   );
 
-  return records.filter((record) => selector(record) === scopedCommunityId);
+  return safeRecords.filter((record) => selector(record) === scopedCommunityId);
 }
 
 function paginate(items, page = 0, size = PAGE_SIZE_DEFAULT) {
+  const safeItems = Array.isArray(items) ? items : [];
   const safePageSize = Math.max(1, size);
   const safePage = Math.max(0, page);
-  const totalItems = items.length;
+  const totalItems = safeItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
   const startIndex = safePage * safePageSize;
   const endIndex = startIndex + safePageSize;
 
   return {
-    items: items.slice(startIndex, endIndex),
+    items: safeItems.slice(startIndex, endIndex),
     page: safePage,
     size: safePageSize,
     totalItems,
@@ -349,10 +351,13 @@ async function fetchCommunityCollection(user) {
 }
 
 function deriveOverviewStats(requests, users) {
-  const pendingRequests = requests.filter((request) => request.status === 'PENDING').length;
-  const resolvedRequests = requests.filter((request) => request.status === 'RESOLVED').length;
-  const activeVolunteers = users.filter((user) => user.role === 'VOLUNTEER' && !user.blocked).length;
-  const totalRequestsToday = requests.filter((request) => {
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const userArr = Array.isArray(users) ? users : [];
+
+  const pendingRequests = reqArr.filter((request) => request.status === 'PENDING').length;
+  const resolvedRequests = reqArr.filter((request) => request.status === 'RESOLVED').length;
+  const activeVolunteers = userArr.filter((user) => user.role === 'VOLUNTEER' && !user.blocked).length;
+  const totalRequestsToday = reqArr.filter((request) => {
     const requestDate = new Date(request.createdAt);
     const today = new Date();
     return requestDate.toDateString() === today.toDateString();
@@ -363,7 +368,7 @@ function deriveOverviewStats(requests, users) {
     activeVolunteers: activeVolunteers || MOCK_ADMIN_STATS.activeVolunteers,
     pendingRequests,
     resolvedRequests,
-    totalMembers: users.length,
+    totalMembers: userArr.length,
   };
 }
 
@@ -394,7 +399,7 @@ function normalizeOverviewPayload(data) {
 }
 
 function filterRequests(requests, filters) {
-  return requests.filter((request) => {
+  return (Array.isArray(requests) ? requests : []).filter((request) => {
     const matchesCategory = !filters.category || request.category === filters.category;
     const matchesUrgency = !filters.urgency || request.urgency === filters.urgency;
     const matchesStatus = !filters.status || request.status === filters.status;
@@ -413,7 +418,7 @@ function filterRequests(requests, filters) {
 }
 
 function filterUsers(users, filters) {
-  return users.filter((user) => {
+  return (Array.isArray(users) ? users : []).filter((user) => {
     const matchesRole = !filters.role || user.role === filters.role;
     const matchesStatus = !filters.status || user.status === filters.status;
     return matchesRole && matchesStatus;
@@ -421,13 +426,15 @@ function filterUsers(users, filters) {
 }
 
 function deriveAnalytics(requests, users) {
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const userArr = Array.isArray(users) ? users : [];
   const lastSevenDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const requestBuckets = lastSevenDays.map((dayLabel, index) => ({
     day: dayLabel,
-    requests: 5 + ((requests.length + index * 3) % 16),
+    requests: 5 + ((reqArr.length + index * 3) % 16),
   }));
 
-  const categoryCounts = requests.reduce((accumulator, request) => {
+  const categoryCounts = reqArr.reduce((accumulator, request) => {
     accumulator[request.category] = (accumulator[request.category] || 0) + 1;
     return accumulator;
   }, {});
@@ -439,15 +446,15 @@ function deriveAnalytics(requests, users) {
     { name: 'General', value: categoryCounts.GENERAL || 0, color: '#9ca3af' },
   ];
 
-  const topVolunteers = users
+  const topVolunteers = userArr
     .filter((user) => user.role === 'VOLUNTEER')
-    .sort((left, right) => right.requestsHelped - left.requestsHelped)
+    .sort((left, right) => (right.requestsHelped || 0) - (left.requestsHelped || 0))
     .slice(0, 5)
     .map((user) => ({
       id: user.id,
-      name: user.fullName,
-      helpedCount: user.requestsHelped,
-      badge: user.badge,
+      name: user.fullName || 'Volunteer',
+      helpedCount: user.requestsHelped || 0,
+      badge: user.badge || 'Volunteer',
     }));
 
   return {
@@ -455,7 +462,7 @@ function deriveAnalytics(requests, users) {
     categoryBreakdown: categoryBreakdown.some((item) => item.value > 0)
       ? categoryBreakdown
       : clone(MOCK_ADMIN_ANALYTICS.categoryBreakdown),
-    averageResponseTime: `${8 + (requests.length % 7)}m ${10 + (users.length % 45)}s`,
+    averageResponseTime: `${8 + (reqArr.length % 7)}m ${10 + (userArr.length % 45)}s`,
     topVolunteers: topVolunteers.length > 0 ? topVolunteers : clone(MOCK_ADMIN_ANALYTICS.topVolunteers),
   };
 }

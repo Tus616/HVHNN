@@ -57,6 +57,8 @@ export default function EditProfile() {
       const res = await apiService.updateProfile(form);
       const updatedData = res.data || form; // fallback to form if backend doesn't return full object
       updateUser(updatedData);
+      // Mark profile setup as complete so future logins go to /feed
+      localStorage.setItem('hvhn_profile_setup_complete', 'true');
       showToast('Profile updated successfully! ✅');
       setTimeout(() => navigate('/profile'), 1500);
     } catch (err) {

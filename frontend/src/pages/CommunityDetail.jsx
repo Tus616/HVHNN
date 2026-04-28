@@ -188,11 +188,13 @@ export default function CommunityDetail() {
     );
   }
 
-  const openCount = requests.filter(r => r.status === 'OPEN' || r.status === 'PENDING').length;
-  const resolvedCount = requests.filter(r => r.status === 'COMPLETED' || r.status === 'CLOSED').length;
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const openCount = reqArr.filter(r => r.status === 'OPEN' || r.status === 'PENDING').length;
+  const resolvedCount = reqArr.filter(r => r.status === 'COMPLETED' || r.status === 'CLOSED').length;
 
   // Find admin from members list
-  const adminMember = members.find(m => m.role === 'ADMIN') || members[0];
+  const memberArr = Array.isArray(members) ? members : [];
+  const adminMember = memberArr.find(m => m.role === 'ADMIN') || memberArr[0];
 
   return (
     <div className="cd-page animate-in">
@@ -225,11 +227,11 @@ export default function CommunityDetail() {
               )}
               <div className="cd-sidebar-meta-item">
                 <span className="cd-meta-icon">👥</span>
-                <span>{community.memberCount || members.length} members</span>
+                <span>{community.memberCount || memberArr.length} members</span>
               </div>
               <div className="cd-sidebar-meta-item">
                 <span className="cd-meta-icon">📋</span>
-                <span>{requests.length} requests</span>
+                <span>{reqArr.length} requests</span>
               </div>
               {community.createdAt && (
                 <div className="cd-sidebar-meta-item">
@@ -269,11 +271,11 @@ export default function CommunityDetail() {
                 <div className="cd-stat-label">Resolved</div>
               </div>
               <div className="cd-stat">
-                <div className="cd-stat-value">{members.length}</div>
+                <div className="cd-stat-value">{memberArr.length}</div>
                 <div className="cd-stat-label">Members</div>
               </div>
               <div className="cd-stat">
-                <div className="cd-stat-value cd-stat-amber">{requests.length - openCount - resolvedCount}</div>
+                <div className="cd-stat-value cd-stat-amber">{reqArr.length - openCount - resolvedCount}</div>
                 <div className="cd-stat-label">In Progress</div>
               </div>
             </div>
@@ -326,13 +328,13 @@ export default function CommunityDetail() {
               className={`cd-tab ${activeTab === 'requests' ? 'cd-tab-active' : ''}`}
               onClick={() => setActiveTab('requests')}
             >
-              📋 Requests <span className="cd-tab-count">{requests.length}</span>
+              📋 Requests <span className="cd-tab-count">{reqArr.length}</span>
             </button>
             <button
               className={`cd-tab ${activeTab === 'members' ? 'cd-tab-active' : ''}`}
               onClick={() => setActiveTab('members')}
             >
-              👥 Members <span className="cd-tab-count">{members.length}</span>
+              👥 Members <span className="cd-tab-count">{memberArr.length}</span>
             </button>
           </div>
 
@@ -352,7 +354,7 @@ export default function CommunityDetail() {
                 )}
               </div>
 
-              {requests.length === 0 ? (
+              {reqArr.length === 0 ? (
                 <div className="cd-empty-tab">
                   <div className="cd-empty-tab-icon">📋</div>
                   <h4>No requests yet</h4>
@@ -365,10 +367,10 @@ export default function CommunityDetail() {
                 </div>
               ) : (
                 <div className="cd-request-list">
-                  {requests.map(req => {
+                  {reqArr.map(req => {
                     const status = STATUS_COLORS[req.status] || STATUS_COLORS.OPEN;
                     // Try to get requester name from members list
-                    const requester = members.find(m => m.userId === req.requestedBy);
+                    const requester = memberArr.find(m => m.userId === req.requestedBy);
                     const requesterName = req.requesterName || requester?.fullName || 'Community Member';
                     return (
                       <div key={req.id} className="cd-request-card">
@@ -405,11 +407,11 @@ export default function CommunityDetail() {
               <div className="cd-content-header">
                 <div>
                   <h3 className="cd-content-title">Community Members</h3>
-                  <p className="cd-content-subtitle">{members.length} members in this community</p>
+                  <p className="cd-content-subtitle">{memberArr.length} members in this community</p>
                 </div>
               </div>
 
-              {members.length === 0 ? (
+              {memberArr.length === 0 ? (
                 <div className="cd-empty-tab">
                   <div className="cd-empty-tab-icon">👥</div>
                   <h4>No members yet</h4>
@@ -417,7 +419,7 @@ export default function CommunityDetail() {
                 </div>
               ) : (
                 <div className="cd-member-grid">
-                  {members.map(member => (
+                  {memberArr.map(member => (
                     <div key={member.id} className="cd-member-card">
                       <div className="cd-member-top">
                         <div className="cd-member-avatar">

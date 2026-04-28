@@ -59,7 +59,10 @@ export default function Chats() {
   useEffect(() => {
     const nextRoomList = Object.values(roomUpdates || {});
     if (!nextRoomList.length) return;
-    setChatRooms((current) => nextRoomList.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), current));
+    setChatRooms((current) => {
+      const roomsArray = Array.isArray(current) ? current : [];
+      return nextRoomList.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), roomsArray);
+    });
   }, [roomUpdates]);
 
   const loadRooms = async () => {
@@ -80,7 +83,8 @@ export default function Chats() {
   // Sidebar Deduplication: Ensure unique participants in direct chats
   const uniqueRooms = (() => {
     const seen = new Set();
-    return chatRooms.filter(room => {
+    const rooms = Array.isArray(chatRooms) ? chatRooms : [];
+    return rooms.filter(room => {
       if (room.type === 'GROUP') return true;
       const other = room.participants?.find(p => !matchesCurrentUser(p, user));
       if (!other) return true; // Keep if no "other" participant found (e.g. self-chat or system)
@@ -91,17 +95,17 @@ export default function Chats() {
     });
   })();
 
-  const activeRoom = chatRooms.find(r => r.id === activeRoomId) || null;
+  const activeRoom = (Array.isArray(chatRooms) ? chatRooms : []).find(r => r.id === activeRoomId) || null;
   const activeRoomParticipants = activeRoom?.participants || [];
   const activeDirectParticipant = activeRoom?.type === 'DIRECT'
-    ? activeRoomParticipants.find((participant) => !matchesCurrentUser(participant, user)) || null
+    ? (Array.isArray(activeRoomParticipants) ? activeRoomParticipants : []).find((participant) => !matchesCurrentUser(participant, user)) || null
     : null;
 
   async function handleMessagesRead(messageId) {
     if (!activeRoomId || !messageId) return;
     try {
       await apiService.markChatMessageRead(messageId);
-      setChatRooms((current) => current.map((room) => (
+      setChatRooms((current) => (Array.isArray(current) ? current : []).map((room) => (
         room.id === activeRoomId ? { ...room, unreadCount: 0 } : room
       )));
     } catch {}
@@ -132,7 +136,7 @@ export default function Chats() {
     if (!roomToDelete) return;
     try {
       await apiService.deleteChatRoom(roomToDelete);
-      setChatRooms(prev => prev.filter(r => r.id !== roomToDelete));
+      setChatRooms(prev => (Array.isArray(prev) ? prev : []).filter(r => r.id !== roomToDelete));
       if (activeRoomId === roomToDelete) setActiveRoomId(null);
     } catch (err) {
       console.error("Failed to delete", err);

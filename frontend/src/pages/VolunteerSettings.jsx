@@ -76,21 +76,27 @@ export default function VolunteerSettings() {
   }
 
   function toggleCategory(category) {
-    setForm((current) => ({
-      ...current,
-      volunteerCategories: current.volunteerCategories.includes(category)
-        ? current.volunteerCategories.filter((entry) => entry !== category)
-        : [...current.volunteerCategories, category],
-    }));
+    setForm((current) => {
+      const isSelected = (Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []).includes(category);
+      return {
+        ...current,
+        volunteerCategories: isSelected
+          ? (Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []).filter((entry) => entry !== category)
+          : [...(Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []), category],
+      };
+    });
   }
 
   function toggleSkill(skill) {
-    setForm((current) => ({
-      ...current,
-      skills: current.skills.includes(skill)
-        ? current.skills.filter((entry) => entry !== skill)
-        : [...current.skills, skill],
-    }));
+    setForm((current) => {
+      const isSelected = (Array.isArray(current.skills) ? current.skills : []).includes(skill);
+      return {
+        ...current,
+        skills: isSelected
+          ? (Array.isArray(current.skills) ? current.skills : []).filter((entry) => entry !== skill)
+          : [...(Array.isArray(current.skills) ? current.skills : []), skill],
+      };
+    });
   }
 
   function updateStatus(nextStatus) {
@@ -248,7 +254,7 @@ export default function VolunteerSettings() {
                 <div className="volunteer-section-label">Help Categories</div>
                 <div className="volunteer-category-grid">
                   {VOLUNTEER_CATEGORY_OPTIONS.map((category) => {
-                    const active = form.volunteerCategories.includes(category.value);
+                    const active = (Array.isArray(form.volunteerCategories) ? form.volunteerCategories : []).includes(category.value);
                     return (
                       <button
                         key={category.value}
@@ -269,7 +275,7 @@ export default function VolunteerSettings() {
                 <p className="text-sm text-gray-500 mb-3">Select specialized skills to be matched with high-priority requests.</p>
                 <div className="flex flex-wrap gap-2">
                   {VOLUNTEER_SKILL_OPTIONS.map((skill) => {
-                    const active = form.skills.includes(skill.value);
+                    const active = (Array.isArray(form.skills) ? form.skills : []).includes(skill.value);
                     return (
                       <button
                         key={skill.value}
@@ -327,7 +333,7 @@ export default function VolunteerSettings() {
 
                 {!form.isAlwaysAvailable ? (
                   <div className="space-y-3">
-                    {form.availabilitySchedule.map((entry, idx) => (
+                    {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : []).map((entry, idx) => (
                       <div key={entry.day} className={`flex items-center gap-4 p-3 rounded-xl border transition-all ${entry.enabled ? 'bg-green-50/50 border-green-200' : 'bg-gray-50/50 border-gray-100 opacity-60'}`}>
                         <div className="w-12 font-black text-gray-400 text-xs">{entry.day}</div>
                         <button
@@ -386,10 +392,10 @@ export default function VolunteerSettings() {
                       <div className="font-bold mb-1 flex items-center gap-2">
                         <span>🗓️</span> Schedule Summary
                       </div>
-                      {form.availabilitySchedule.some(e => e.enabled) ? (
+                      {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : []).some(e => e.enabled) ? (
                         <p>
-                          Auto-ONLINE: {form.availabilitySchedule
-                            .filter(e => e.enabled)
+                          Auto-ONLINE: {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : [])
+                            .filter(e => e?.enabled)
                             .map(e => `${e.day} (${e.startTime}-${e.endTime})`)
                             .join(', ')}
                         </p>

@@ -24,11 +24,11 @@ export default function AdminDashboard() {
       apiService.getPendingTrusted(),
       apiService.getFlaggedRequests(),
     ]).then(([statsRes, reqRes, usersRes, pendingRes, flaggedRes]) => {
-      setStats(statsRes.data);
-      setRequests(reqRes.data);
-      setUsers(usersRes.data);
-      setPendingTrusted(pendingRes.data);
-      setFlaggedRequests(flaggedRes.data);
+      setStats(statsRes.data || null);
+      setRequests(Array.isArray(reqRes.data) ? reqRes.data : []);
+      setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+      setPendingTrusted(Array.isArray(pendingRes.data) ? pendingRes.data : []);
+      setFlaggedRequests(Array.isArray(flaggedRes.data) ? flaggedRes.data : []);
     }).catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -41,8 +41,8 @@ export default function AdminDashboard() {
         apiService.getAdminUsers(),
         apiService.getPendingTrusted()
       ]);
-      setUsers(usersRes.data);
-      setPendingTrusted(pendingRes.data);
+      setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+      setPendingTrusted(Array.isArray(pendingRes.data) ? pendingRes.data : []);
     } catch (err) {
       console.error(err);
       alert('Failed to promote user: ' + err.message);
@@ -60,9 +60,9 @@ export default function AdminDashboard() {
         apiService.getAdminRequests(),
         apiService.getFlaggedRequests()
       ]);
-      setStats(statsRes.data);
-      setRequests(reqRes.data);
-      setFlaggedRequests(flaggedRes.data);
+      setStats(statsRes.data || null);
+      setRequests(Array.isArray(reqRes.data) ? reqRes.data : []);
+      setFlaggedRequests(Array.isArray(flaggedRes.data) ? flaggedRes.data : []);
     } catch (err) {
       console.error(err);
       alert('Review failed: ' + err.message);

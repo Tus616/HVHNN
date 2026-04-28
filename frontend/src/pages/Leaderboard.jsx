@@ -16,7 +16,7 @@ export default function Leaderboard() {
     setLoading(true);
     try {
       const res = await apiService.getLeaderboard(timeRange);
-      setUsers(res.data);
+      setUsers(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -29,8 +29,9 @@ export default function Leaderboard() {
   const badgeIcon = { Hero: '🦸', Champion: '🏆', Helper: '🤝', Volunteer: '💪', Newcomer: '🌱' };
   const rankIcons = ['🥇', '🥈', '🥉'];
   
-  const myRank = users.findIndex(u => u.id === user?.userId) + 1;
-  const myData = users.find(u => u.id === user?.userId);
+  const usersArray = Array.isArray(users) ? users : [];
+  const myRank = usersArray.findIndex(u => u.id === user?.userId) + 1;
+  const myData = usersArray.find(u => u.id === user?.userId);
 
   return (
     <div className="animate-in">
@@ -84,7 +85,7 @@ export default function Leaderboard() {
 
       {/* Top 3 */}
       <div className="grid-3" style={{ marginBottom: '32px' }}>
-        {users.slice(0, 3).map((u, i) => (
+        {usersArray.slice(0, 3).map((u, i) => (
           <div key={u.id} className="stat-card" style={{ 
             position: 'relative',
             background: i === 0 ? 'rgba(245,158,11,0.05)' : 'var(--bg-card)',
@@ -123,7 +124,7 @@ export default function Leaderboard() {
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {usersArray.map((u, i) => (
               <tr key={u.id} style={{ background: u.id === user?.userId ? 'rgba(99, 102, 241, 0.05)' : undefined }}>
                 <td className="rank" style={{ padding: '16px 24px' }}>{i < 3 ? rankIcons[i] : `#${i + 1}`}</td>
                 <td>

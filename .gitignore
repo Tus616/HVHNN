@@ -13,6 +13,40 @@ build/
 .env.*
 !.env.example
 
+# Sensitive files (keys, certs, tokens, service accounts)
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.kdb
+*.srl
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+.npmrc
+.netrc
+*service-account*.json
+*serviceAccount*.json
+*firebase*key*.json
+*gcp*key*.json
+*google-credentials*.json
+credentials*.json
+secrets*.json
+secret*.json
+
+# Local backend config overrides (often contain secrets)
+application-*.properties
+application-*.yml
+application-*.yaml
+!application-example.properties
+!application-example.yml
+!application-example.yaml
+
 # IDE
 .idea/
 .vscode/

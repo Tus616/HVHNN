@@ -16,6 +16,10 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
+@CrossOrigin(
+        origins = {"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"},
+        allowCredentials = "true"
+)
 @RequestMapping("/api/requests")
 public class HelpRequestController {
 
@@ -62,6 +66,16 @@ public class HelpRequestController {
     @GetMapping("/open")
     public ResponseEntity<List<Map<String, Object>>> getOpenRequests() {
         List<HelpRequest> requests = requestService.getOpenRequests();
+        return ResponseEntity.ok(requests.stream().map(requestViewMapper::toRequestMap).toList());
+    }
+
+    /**
+     * Default feed endpoint used by the React Help Feed.
+     * Returns OPEN + ACTIVE requests (active = already accepted/assigned).
+     */
+    @GetMapping
+    public ResponseEntity<List<Map<String, Object>>> getFeedRequests() {
+        List<HelpRequest> requests = requestService.getFeedRequests();
         return ResponseEntity.ok(requests.stream().map(requestViewMapper::toRequestMap).toList());
     }
 
@@ -119,6 +133,28 @@ public class HelpRequestController {
                                            @AuthenticationPrincipal User user) {
         try {
             HelpRequest request = requestService.cancelRequest(id, requireAuthenticatedUser(user));
+            return ResponseEntity.ok(requestViewMapper.toRequestMap(request));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/verify-complete")
+    public ResponseEntity<?> verifyRequestCompletion(@PathVariable String id,
+                                                      @AuthenticationPrincipal User user) {
+        try {
+            HelpRequest request = requestService.verifyRequestCompletion(id, requireAuthenticatedUser(user));
+            return ResponseEntity.ok(requestViewMapper.toRequestMap(request));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/reject-complete")
+    public ResponseEntity<?> rejectRequestCompletion(@PathVariable String id,
+                                                      @AuthenticationPrincipal User user) {
+        try {
+            HelpRequest request = requestService.rejectRequestCompletion(id, requireAuthenticatedUser(user));
             return ResponseEntity.ok(requestViewMapper.toRequestMap(request));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

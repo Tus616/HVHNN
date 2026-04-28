@@ -40,7 +40,7 @@ export default function CommunityManage() {
         apiService.getCommunities(),
         apiService.getCommunityMembers(parseInt(id, 10)),
       ]);
-      const comm = commRes.data.find(c => c.id === parseInt(id, 10));
+      const comm = (Array.isArray(commRes.data) ? commRes.data : []).find(c => c.id === parseInt(id, 10));
       if (comm) {
         setCommunity(comm);
         setForm({
@@ -53,7 +53,7 @@ export default function CommunityManage() {
           emailDomain: comm.emailDomain || '',
         });
       }
-      setMembers(membersRes.data || []);
+      setMembers(Array.isArray(membersRes.data) ? membersRes.data : []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -75,7 +75,7 @@ export default function CommunityManage() {
     setSaving(true);
     try {
       const res = await apiService.updateCommunity(parseInt(id, 10), form);
-      setCommunity(res.data);
+      setCommunity(res.data || null);
       showToast('Community settings updated! ✅');
     } catch (err) {
       showToast(err.message || 'Failed to save.', 'error');
@@ -102,7 +102,7 @@ export default function CommunityManage() {
     if (!confirm(`Remove ${memberName} from this community?`)) return;
     try {
       await apiService.removeCommunityMember(parseInt(id, 10), memberId);
-      setMembers(prev => prev.filter(m => m.id !== memberId));
+      setMembers(prev => (Array.isArray(prev) ? prev : []).filter(m => m.id !== memberId));
       showToast(`${memberName} removed from community.`);
     } catch (err) {
       showToast(err.message || 'Failed to remove member.', 'error');
