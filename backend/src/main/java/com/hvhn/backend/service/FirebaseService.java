@@ -20,6 +20,11 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Base64;
+import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 
 @Service
 public class FirebaseService {
@@ -227,27 +232,33 @@ public class FirebaseService {
     private FirebaseUserDto decodeTokenUnsafe(String token) {
         try {
             String[] parts = token.split("\\.");
-            if (parts.length != 3) throw new IllegalArgumentException("Invalid JWT token format");
-            
-            // Add padding if missing
-            String payloadBase64 = parts[1];
-            while (payloadBase64.length() % 4 != 0) {
-                payloadBase64 += "=";
+            if (parts.length != 3) {
+                throw new IllegalArgumentException("Invalid JWT token format. Expected 3 parts but got " + parts.length);
             }
             
-            String payloadStr = new String(java.util.Base64.getUrlDecoder().decode(payloadBase64), java.nio.charset.StandardCharsets.UTF_8);
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            java.util.Map<String, Object> claims = mapper.readValue(payloadStr, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+            // JWT payload is the second part, using URL-safe base64 encoding (without padding)
+            byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[1]);
+            String payloadStr = new String(payloadBytes, StandardCharsets.UTF_8);
+            
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> claims = mapper.readValue(payloadStr, new TypeReference<Map<String, Object>>() {});
             
             String email = (String) claims.get("email");
             String name = (String) claims.get("name");
             String uid = (String) claims.get("user_id");
             if (uid == null) uid = (String) claims.get("sub");
+            
             Object ev = claims.get("email_verified");
-            boolean emailVerified = ev != null && (ev instanceof Boolean ? (Boolean) ev : Boolean.parseBoolean(ev.toString()));
+            boolean emailVerified = false;
+            if (ev instanceof Boolean) {
+                emailVerified = (Boolean) ev;
+            } else if (ev != null) {
+                emailVerified = Boolean.parseBoolean(ev.toString());
+            }
             
             return new FirebaseUserDto(email, name, uid, emailVerified);
         } catch (Exception e) {
+            logger.error("Failed to decode mock Firebase token: {}", maskToken(token), e);
             throw new FirebaseAuthenticationException("Failed to decode mock Firebase token: " + e.getMessage(), e);
         }
     }
