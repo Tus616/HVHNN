@@ -65,6 +65,9 @@ export default function Login() {
     setLoadingAction('emailLink');
 
     try {
+      if (!firebaseConfigured) {
+        throw new Error('Magic Link is disabled in local development. Please use Email & Password or Google Sign In.');
+      }
       const normalizedEmail = await sendLoginLink(email);
       setEmail(normalizedEmail);
       setSuccess(`Authentication link sent to ${normalizedEmail}. If you do not see it in Inbox within a minute, check Spam or Promotions and search for ${senderHint}.`);
@@ -131,7 +134,6 @@ export default function Login() {
             </div>
           </div>
         )}
-
 
         {showLocalFirebaseWarning && (
           <div className="alert alert-warning" style={{ margin: '16px 0', fontSize: '0.82rem', padding: '12px' }}>
