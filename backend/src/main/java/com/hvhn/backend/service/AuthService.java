@@ -80,7 +80,7 @@ public class AuthService {
     }
 
     public AuthResponse loginWithFirebase(FirebaseAuthRequest request) {
-        FirebaseToken decodedToken = firebaseService.verifyAndDecodeIdToken(request.getIdToken());
+        com.hvhn.backend.dto.FirebaseUserDto decodedToken = firebaseService.verifyAndDecodeIdToken(request.getIdToken());
         String email = normalizeEmail(decodedToken.getEmail());
 
         if (!StringUtils.hasText(email)) {

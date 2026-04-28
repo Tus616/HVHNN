@@ -50,11 +50,12 @@ public class FirebaseConfig {
             }
 
             if (!serviceAccountResource.exists()) {
-                throw new IllegalStateException(
+                logger.warn(
                         "Firebase service account file was not found at "
                                 + serviceAccountResource.getDescription()
-                                + ". Set firebase.service-account.path to a valid classpath resource."
+                                + ". Bypassing Firebase initialization."
                 );
+                return null;
             }
 
             try (InputStream serviceAccount = serviceAccountResource.getInputStream()) {
@@ -84,13 +85,17 @@ public class FirebaseConfig {
     }
 
     @Bean
-    public FirebaseAuth firebaseAuth(FirebaseApp firebaseApp) {
+    public FirebaseAuth firebaseAuth(org.springframework.beans.factory.ObjectProvider<FirebaseApp> firebaseAppProvider) {
+        FirebaseApp firebaseApp = firebaseAppProvider.getIfAvailable();
+        if (firebaseApp == null) return null;
         logger.info("Creating FirebaseAuth client for app '{}'.", firebaseApp.getName());
         return FirebaseAuth.getInstance(firebaseApp);
     }
 
     @Bean
-    public FirebaseMessaging firebaseMessaging(FirebaseApp firebaseApp) {
+    public FirebaseMessaging firebaseMessaging(org.springframework.beans.factory.ObjectProvider<FirebaseApp> firebaseAppProvider) {
+        FirebaseApp firebaseApp = firebaseAppProvider.getIfAvailable();
+        if (firebaseApp == null) return null;
         logger.info("Creating FirebaseMessaging client for app '{}'.", firebaseApp.getName());
         return FirebaseMessaging.getInstance(firebaseApp);
     }

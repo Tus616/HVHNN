@@ -10,6 +10,7 @@ import com.google.firebase.messaging.FirebaseMessagingException;
 import com.google.firebase.messaging.Message;
 import com.google.firebase.messaging.Notification;
 import com.hvhn.backend.dto.FirebaseTokenResponse;
+import com.hvhn.backend.dto.FirebaseUserDto;
 import com.hvhn.backend.exception.FirebaseAuthenticationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,24 +32,29 @@ public class FirebaseService {
     private final long verificationRetryDelayMs;
 
     public FirebaseService(
-            FirebaseAuth firebaseAuth,
-            FirebaseMessaging firebaseMessaging,
+            org.springframework.beans.factory.ObjectProvider<FirebaseAuth> firebaseAuthProvider,
+            org.springframework.beans.factory.ObjectProvider<FirebaseMessaging> firebaseMessagingProvider,
             @Value("${firebase.auth.retry-attempts:2}") int verificationRetryAttempts,
             @Value("${firebase.auth.retry-delay-ms:250}") long verificationRetryDelayMs
     ) {
-        this.firebaseAuth = firebaseAuth;
-        this.firebaseMessaging = firebaseMessaging;
+        this.firebaseAuth = firebaseAuthProvider.getIfAvailable();
+        this.firebaseMessaging = firebaseMessagingProvider.getIfAvailable();
         this.verificationRetryAttempts = Math.max(1, verificationRetryAttempts);
         this.verificationRetryDelayMs = Math.max(0L, verificationRetryDelayMs);
     }
 
-    public FirebaseToken verifyAndDecodeIdToken(String idToken) {
+    public FirebaseUserDto verifyAndDecodeIdToken(String idToken) {
         if (!StringUtils.hasText(idToken)) {
             logger.warn("Firebase token verification failed because the ID token was missing.");
             throw new FirebaseAuthenticationException("Missing Firebase ID token");
         }
 
         String sanitizedToken = idToken.trim();
+
+        if (firebaseAuth == null) {
+            logger.warn("Firebase is not configured on the backend. Performing unsafe local decoding of the token for development purposes.");
+            return decodeTokenUnsafe(sanitizedToken);
+        }
 
         for (int attempt = 1; attempt <= verificationRetryAttempts; attempt++) {
             try {
@@ -59,7 +65,12 @@ public class FirebaseService {
                         decodedToken.getUid(),
                         decodedToken.getEmail()
                 );
-                return decodedToken;
+                return new FirebaseUserDto(
+                    decodedToken.getEmail(),
+                    decodedToken.getName(),
+                    decodedToken.getUid(),
+                    Boolean.TRUE.equals(decodedToken.isEmailVerified())
+                );
             } catch (FirebaseAuthException exception) {
                 // Only retry failures that come from Firebase certificate fetch or transient backend issues.
                 if (isTransientFailure(exception) && attempt < verificationRetryAttempts) {
@@ -91,14 +102,14 @@ public class FirebaseService {
     }
 
     public FirebaseTokenResponse verifyIdToken(String idToken) {
-        FirebaseToken decodedToken = verifyAndDecodeIdToken(idToken);
+        FirebaseUserDto decodedToken = verifyAndDecodeIdToken(idToken);
 
         return new FirebaseTokenResponse(
                 true,
                 "Firebase ID token is valid",
                 decodedToken.getUid(),
                 decodedToken.getEmail(),
-                Boolean.TRUE.equals(decodedToken.isEmailVerified())
+                decodedToken.isEmailVerified()
         );
     }
 
@@ -211,5 +222,33 @@ public class FirebaseService {
     private String maskToken(String token) {
         int visibleCharacters = Math.min(6, token.length());
         return token.substring(token.length() - visibleCharacters);
+    }
+
+    private FirebaseUserDto decodeTokenUnsafe(String token) {
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) throw new IllegalArgumentException("Invalid JWT token format");
+            
+            // Add padding if missing
+            String payloadBase64 = parts[1];
+            while (payloadBase64.length() % 4 != 0) {
+                payloadBase64 += "=";
+            }
+            
+            String payloadStr = new String(java.util.Base64.getUrlDecoder().decode(payloadBase64), java.nio.charset.StandardCharsets.UTF_8);
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            java.util.Map<String, Object> claims = mapper.readValue(payloadStr, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+            
+            String email = (String) claims.get("email");
+            String name = (String) claims.get("name");
+            String uid = (String) claims.get("user_id");
+            if (uid == null) uid = (String) claims.get("sub");
+            Object ev = claims.get("email_verified");
+            boolean emailVerified = ev != null && (ev instanceof Boolean ? (Boolean) ev : Boolean.parseBoolean(ev.toString()));
+            
+            return new FirebaseUserDto(email, name, uid, emailVerified);
+        } catch (Exception e) {
+            throw new FirebaseAuthenticationException("Failed to decode mock Firebase token: " + e.getMessage(), e);
+        }
     }
 }

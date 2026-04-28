@@ -22,8 +22,13 @@ import java.util.stream.Collectors;
 import java.util.Comparator;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Service
 public class HelpRequestService {
+
+    private static final Logger logger = LoggerFactory.getLogger(HelpRequestService.class);
 
     private final HelpRequestRepository requestRepository;
     private final UserRepository userRepository;
@@ -176,7 +181,7 @@ public class HelpRequestService {
         // 3. Unified AI Volunteer Matching
         if ("OPEN".equals(savedRequest.getStatus()) && !savedRequest.isFlagged()) {
             try {
-                List<User> volunteers = userRepository.findByRole("USER"); // Simple fetch for now
+                List<User> volunteers = userRepository.findAll(); // Simple fetch for now
                 List<Map<String, Object>> volData = volunteers.stream().map(v -> {
                     Map<String, Object> m = new java.util.HashMap<>();
                     m.put("volunteer_id", v.getId());

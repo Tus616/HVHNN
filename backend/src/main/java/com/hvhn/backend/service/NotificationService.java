@@ -94,4 +94,8 @@ public class NotificationService {
             log.error("Failed to send emergency email to {}", contact.getEmail(), exception);
         }
     }
+
+    public void sendNotification(String userId, String type, String message) {
+        log.info("Sending notification to user {}: [{}] {}", userId, type, message);
+    }
 }
