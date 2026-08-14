@@ -37,6 +37,7 @@ public class MlIntelligenceService {
     private final HelpRequestRepository requestRepository;
     private final RequestVolunteerRepository requestVolunteerRepository;
     private final HttpClient httpClient;
+    private final Duration requestTimeout;
 
     public MlIntelligenceService(
             @Value("${ml.enabled:true}") boolean enabled,
@@ -51,7 +52,8 @@ public class MlIntelligenceService {
         this.objectMapper = objectMapper;
         this.requestRepository = requestRepository;
         this.requestVolunteerRepository = requestVolunteerRepository;
-        this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(Math.max(1, Math.min(timeoutSeconds, 5)))).build();
+        this.requestTimeout = Duration.ofSeconds(Math.max(1, timeoutSeconds));
+        this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     }
 
     public Map<String, Object> health() {
@@ -201,7 +203,7 @@ public class MlIntelligenceService {
         if (!enabled) return Optional.empty();
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(serviceUrl + path))
-                    .timeout(Duration.ofSeconds(5))
+                    .timeout(requestTimeout)
                     .header("Content-Type", "application/json");
             HttpRequest request = body == null
                     ? builder.GET().build()
