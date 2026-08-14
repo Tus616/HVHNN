@@ -6,7 +6,6 @@ import com.hvhn.backend.repository.EmailOtpChallengeRepository;
 import com.hvhn.backend.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
@@ -18,20 +17,22 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 class EmailOtpServiceTest {
 
     private final UserRepository userRepository = mock(UserRepository.class);
     private final EmailOtpChallengeRepository challengeRepository = mock(EmailOtpChallengeRepository.class);
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    // Mailjet not configured in test — isConfigured() returns false, so no real HTTP calls.
+    private final MailjetEmailService mailjetEmailService = mock(MailjetEmailService.class);
     private final List<EmailOtpChallenge> savedChallenges = new ArrayList<>();
     private EmailOtpService service;
 
     @BeforeEach
     void setUp() {
         savedChallenges.clear();
+
         when(userRepository.existsByEmail(anyString())).thenReturn(false);
         when(userRepository.existsByNormalizedEmail(anyString())).thenReturn(false);
         when(challengeRepository.countByNormalizedEmailAndPurposeAndCreatedAtAfter(anyString(), anyString(), any()))
@@ -52,11 +53,14 @@ class EmailOtpServiceTest {
         });
         when(challengeRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
+        // In tests, Mailjet is "not configured" so sendRegistrationOtp won't attempt HTTP calls.
+        when(mailjetEmailService.isConfigured()).thenReturn(false);
+
         service = new EmailOtpService(
                 userRepository,
                 challengeRepository,
                 passwordEncoder,
-                emptyProvider(),
+                mailjetEmailService,
                 "",
                 300,
                 30,
@@ -152,29 +156,5 @@ class EmailOtpServiceTest {
 
         assertThrows(ResponseStatusException.class,
                 () -> service.sendRegistrationOtp("user@example.com", null, null));
-    }
-
-    private ObjectProvider<org.springframework.mail.javamail.JavaMailSender> emptyProvider() {
-        return new ObjectProvider<>() {
-            @Override
-            public org.springframework.mail.javamail.JavaMailSender getObject(Object... args) {
-                return null;
-            }
-
-            @Override
-            public org.springframework.mail.javamail.JavaMailSender getIfAvailable() {
-                return null;
-            }
-
-            @Override
-            public org.springframework.mail.javamail.JavaMailSender getIfUnique() {
-                return null;
-            }
-
-            @Override
-            public org.springframework.mail.javamail.JavaMailSender getObject() {
-                return null;
-            }
-        };
     }
 }

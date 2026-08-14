@@ -54,7 +54,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             new AntPathRequestMatcher("/api/community/announcements/pinned", "GET"),
             new AntPathRequestMatcher("/api/communities", "GET"),
             new AntPathRequestMatcher("/ws/**"),
-            new AntPathRequestMatcher("/uploads/**"),
+            // /uploads/** removed — chat attachments served from Cloudinary (absolute HTTPS URLs)
             new AntPathRequestMatcher("/error")
     );
 

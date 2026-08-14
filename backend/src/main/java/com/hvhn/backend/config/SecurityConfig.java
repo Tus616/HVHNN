@@ -5,7 +5,6 @@ import com.hvhn.backend.security.RequestLoggingFilter;
 import com.hvhn.backend.security.RestAccessDeniedHandler;
 import com.hvhn.backend.security.RestAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
-import org.springframework.security.web.header.writers.StaticHeadersWriter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -79,7 +78,7 @@ public class SecurityConfig {
                         .requestMatchers(new AntPathRequestMatcher("/api/community/announcements/pinned", HttpMethod.GET.name())).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/api/communities", HttpMethod.GET.name())).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/ws/**")).permitAll()
-                        .requestMatchers(new AntPathRequestMatcher("/uploads/**")).permitAll()
+                        // /uploads/** removed — chat attachments are served from Cloudinary (absolute HTTPS URLs)
                         .requestMatchers(new AntPathRequestMatcher("/api/admin/**")).hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

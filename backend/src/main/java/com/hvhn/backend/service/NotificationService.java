@@ -6,14 +6,10 @@ import com.hvhn.backend.model.enums.*;
 import com.hvhn.backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.mail.MailException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -41,7 +37,7 @@ public class NotificationService {
     private final UserRepository userRepository;
     private final FirebaseService firebaseService;
     private final SimpMessagingTemplate messagingTemplate;
-    private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final MailjetEmailService mailjetEmailService;
     private final String fromAddress;
 
     public NotificationService(
@@ -53,8 +49,8 @@ public class NotificationService {
             UserRepository userRepository,
             FirebaseService firebaseService,
             SimpMessagingTemplate messagingTemplate,
-            ObjectProvider<JavaMailSender> mailSenderProvider,
-            @Value("${app.mail.from:${spring.mail.username:}}") String fromAddress
+            MailjetEmailService mailjetEmailService,
+            @Value("${app.mail.from:}") String fromAddress
     ) {
         this.notificationRepository = notificationRepository;
         this.preferencesRepository = preferencesRepository;
@@ -64,7 +60,7 @@ public class NotificationService {
         this.userRepository = userRepository;
         this.firebaseService = firebaseService;
         this.messagingTemplate = messagingTemplate;
-        this.mailSenderProvider = mailSenderProvider;
+        this.mailjetEmailService = mailjetEmailService;
         this.fromAddress = fromAddress;
     }
 
@@ -461,21 +457,20 @@ public class NotificationService {
             recordSkipped(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, "EMAIL_UNAVAILABLE", false);
             return;
         }
-        JavaMailSender sender = mailSenderProvider.getIfAvailable();
-        if (sender == null || !StringUtils.hasText(fromAddress)) {
-            recordAttempt(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, null, NotificationDeliveryStatus.FAILED, "SMTP_UNAVAILABLE", true);
+        if (!mailjetEmailService.isConfigured()) {
+            recordAttempt(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, null, NotificationDeliveryStatus.FAILED, "MAILJET_UNAVAILABLE", true);
             return;
         }
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom(fromAddress);
-            message.setTo(recipient.getEmail());
-            message.setSubject(notification.getTitle());
-            message.setText(notification.getBody());
-            sender.send(message);
+            mailjetEmailService.sendEmail(
+                    recipient.getEmail(),
+                    notification.getTitle(),
+                    notification.getBody()
+            );
             recordAttempt(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, null, NotificationDeliveryStatus.SENT, null, false);
-        } catch (MailException exception) {
-            recordAttempt(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, null, NotificationDeliveryStatus.FAILED, "SMTP_FAILURE", true);
+        } catch (MailjetEmailService.EmailDeliveryException exception) {
+            log.error("[email] provider=Mailjet error=NOTIFICATION_DELIVERY_FAILURE notificationId={}", notification.getId());
+            recordAttempt(notification.getId(), notification.getRecipientUserId(), NotificationDeliveryChannel.EMAIL, null, NotificationDeliveryStatus.FAILED, "MAILJET_FAILURE", true);
         }
     }
 
@@ -637,20 +632,18 @@ public class NotificationService {
     }
 
     private void sendEmergencyEmail(EmergencyContact contact, User user, HelpRequest request) {
-        JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
-        if (mailSender == null) {
-            log.warn("Emergency email delivery is not configured because JavaMailSender is unavailable.");
+        if (!mailjetEmailService.isConfigured()) {
+            log.warn("[email] Emergency email delivery skipped — Mailjet is not configured.");
             return;
         }
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(fromAddress);
-        message.setTo(contact.getEmail());
-        message.setSubject("URGENT: Emergency SOS Alert from " + user.getFullName());
-        message.setText("Sahay emergency alert. Open Sahay for protected details.");
         try {
-            mailSender.send(message);
-        } catch (MailException exception) {
-            log.error("Failed to send emergency email to {}", contact.getEmail(), exception);
+            mailjetEmailService.sendEmail(
+                    contact.getEmail(),
+                    "URGENT: Emergency SOS Alert from " + user.getFullName(),
+                    "Sahay emergency alert. Open Sahay for protected details."
+            );
+        } catch (MailjetEmailService.EmailDeliveryException exception) {
+            log.error("[email] provider=Mailjet error=EMERGENCY_EMAIL_FAILURE to=[redacted]");
         }
     }
 

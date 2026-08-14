@@ -16,7 +16,6 @@ import com.hvhn.backend.repository.ChatRoomRepository;
 import com.hvhn.backend.repository.ChatRoomStateRepository;
 import com.hvhn.backend.repository.UserPresenceRepository;
 import com.hvhn.backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.dao.DuplicateKeyException;
@@ -29,11 +28,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -54,7 +48,7 @@ public class ChatService {
     private final MongoTemplate mongoTemplate;
     private final SimpMessagingTemplate messagingTemplate;
     private final NotificationService notificationService;
-    private final Path uploadRoot;
+    private final CloudinaryUploadService cloudinaryUploadService;
 
     public ChatService(
             ChatRoomRepository chatRoomRepository,
@@ -66,7 +60,7 @@ public class ChatService {
             MongoTemplate mongoTemplate,
             SimpMessagingTemplate messagingTemplate,
             NotificationService notificationService,
-            @Value("${app.chat.upload-dir:uploads/chat}") String uploadDir
+            CloudinaryUploadService cloudinaryUploadService
     ) {
         this.chatRoomRepository = chatRoomRepository;
         this.chatMessageRepository = chatMessageRepository;
@@ -77,7 +71,7 @@ public class ChatService {
         this.mongoTemplate = mongoTemplate;
         this.messagingTemplate = messagingTemplate;
         this.notificationService = notificationService;
-        this.uploadRoot = Paths.get(uploadDir).toAbsolutePath().normalize();
+        this.cloudinaryUploadService = cloudinaryUploadService;
     }
 
     public List<ChatRoomView> getRooms(User currentUser) {
@@ -331,19 +325,18 @@ public class ChatService {
             throw new IllegalArgumentException("Choose a file to upload");
         }
 
-        String originalFileName = StringUtils.hasText(file.getOriginalFilename()) ? file.getOriginalFilename() : "attachment";
-        String storedFileName = UUID.randomUUID() + "-" + sanitizeFileName(originalFileName);
-        Path destination = uploadRoot.resolve(storedFileName).normalize();
-
+        String secureUrl;
         try {
-            Files.createDirectories(uploadRoot);
-            Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException exception) {
-            throw new IllegalStateException("We could not store the uploaded file right now");
+            secureUrl = cloudinaryUploadService.upload(file);
+        } catch (CloudinaryUploadService.CloudinaryUploadException ex) {
+            throw new IllegalStateException(ex.getMessage(), ex);
         }
 
+        String originalFileName = StringUtils.hasText(file.getOriginalFilename())
+                ? file.getOriginalFilename() : "attachment";
+
         FileUploadResponse response = new FileUploadResponse();
-        response.setUrl("/uploads/chat/" + storedFileName);
+        response.setUrl(secureUrl);
         response.setFileName(originalFileName);
         response.setContentType(file.getContentType());
         response.setSize(file.getSize());
@@ -810,12 +803,6 @@ public class ChatService {
             throw new IllegalArgumentException("Client message ID is too long");
         }
         return normalized;
-    }
-
-    private String sanitizeFileName(String fileName) {
-        String normalized = fileName.replace("\\", "-").replace("/", "-").trim();
-        String sanitized = normalized.replaceAll("[^A-Za-z0-9._-]", "-");
-        return sanitized.isBlank() ? "attachment" : sanitized;
     }
 
     private String formatDateTime(LocalDateTime value) {

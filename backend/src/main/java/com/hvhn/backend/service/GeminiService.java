@@ -4,27 +4,50 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.AccessToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import jakarta.annotation.PostConstruct;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Core service for calling Google Gemini API via Vertex AI REST endpoints.
- * Authenticates using the GCP service account JSON key file.
+ * Core service for calling the Gemini Developer API (Google AI Studio).
+ *
+ * <p>Authentication uses a plain API key — no Vertex AI, no service-account JSON,
+ * no Google Cloud billing required.
+ *
+ * <p>Required environment variable:
+ * <ul>
+ *   <li>{@code GEMINI_API_KEY} — key obtained from Google AI Studio</li>
+ * </ul>
+ *
+ * <p>Optional:
+ * <ul>
+ *   <li>{@code GEMINI_MODEL} — defaults to {@code gemini-2.5-flash}</li>
+ *   <li>{@code GEMINI_EMBEDDING_MODEL} — defaults to {@code gemini-embedding-2}
+ *       (supported by the Developer API embedContent endpoint)</li>
+ * </ul>
+ *
+ * <p>Endpoints used:
+ * <pre>
+ *   generateContent : https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}
+ *   embedContent    : https://generativelanguage.googleapis.com/v1beta/models/{embeddingModel}:embedContent?key={apiKey}
+ * </pre>
+ *
+ * <p>The {@code gemini-embedding-2} model is verified compatible with the
+ * {@code embedContent} endpoint of the Gemini Developer API.
+ * Response shape: {@code { "embedding": { "values": [...] } }}
  */
 @Service
 public class GeminiService {
@@ -32,65 +55,43 @@ public class GeminiService {
     private static final Logger logger = LoggerFactory.getLogger(GeminiService.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${gemini.project-id}")
-    private String projectId;
-
-    @Value("${gemini.location}")
-    private String location;
-
-    @Value("${gemini.model}")
-    private String model;
-
-    @Value("${gemini.embedding-model}")
-    private String embeddingModel;
-
-    @Value("${gemini.service-account.path:}")
-    private String serviceAccountPath;
+    /** Gemini Developer API base URL */
+    private static final String API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 
     @Value("${gemini.api-key:}")
     private String apiKey;
 
-    private final org.springframework.core.io.ResourceLoader resourceLoader;
-    private GoogleCredentials credentials;
+    @Value("${gemini.model:gemini-2.5-flash}")
+    private String model;
+
+    /**
+     * Embedding model for the Developer API embedContent endpoint.
+     * {@code gemini-embedding-2} is the recommended model and is confirmed
+     * compatible with the Developer API (not Vertex AI only).
+     */
+    @Value("${gemini.embedding-model:gemini-embedding-2}")
+    private String embeddingModel;
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
             .build();
 
-    public GeminiService(org.springframework.core.io.ResourceLoader resourceLoader) {
-        this.resourceLoader = resourceLoader;
-    }
-
     @PostConstruct
     public void init() {
-        if (!org.springframework.util.StringUtils.hasText(serviceAccountPath)) {
-            if (org.springframework.util.StringUtils.hasText(apiKey)) {
-                logger.info("Using direct Gemini API Key fallback");
-            } else {
-                logger.warn("Neither Gemini service account nor API key configured. AI features will fail or use fallback.");
-            }
-            credentials = null;
-            return;
-        }
-
-        try {
-            org.springframework.core.io.Resource serviceAccountResource = resourceLoader.getResource(serviceAccountPath);
-            try (InputStream is = serviceAccountResource.getInputStream()) {
-                credentials = GoogleCredentials.fromStream(is)
-                        .createScoped(List.of("https://www.googleapis.com/auth/cloud-platform"));
-                credentials.refreshIfExpired();
-                logger.info("Gemini AI service initialized successfully for project: {}", projectId);
-            }
-        } catch (Exception e) {
-            logger.error("Failed to initialize Gemini AI service. AI features will use fallback logic.", e);
-            credentials = null;
+        if (!StringUtils.hasText(apiKey)) {
+            logger.warn("[gemini] GEMINI_API_KEY is not set. AI features will be unavailable. "
+                    + "Obtain a key from https://aistudio.google.com/app/apikey");
+        } else {
+            logger.info("[gemini] GeminiService initialized with Developer API. model={} embeddingModel={}",
+                    model, embeddingModel);
         }
     }
 
     /**
-     * Returns true if the Gemini API is properly configured and available.
+     * Returns {@code true} if a Gemini API key is present.
      */
     public boolean isAvailable() {
-        return credentials != null || org.springframework.util.StringUtils.hasText(apiKey);
+        return StringUtils.hasText(apiKey);
     }
 
     /**
@@ -98,14 +99,12 @@ public class GeminiService {
      */
     public String generateText(String prompt) {
         if (!isAvailable()) {
-            logger.warn("Gemini is not available. Returning null.");
+            logger.warn("[gemini] generateText called but Gemini is not available (no API key).");
             return null;
         }
 
         try {
-            String endpoint = credentials != null
-                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
-                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
+            String endpoint = API_BASE + model + ":generateContent?key=" + apiKey;
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             ArrayNode contents = requestBody.putArray("contents");
@@ -113,7 +112,6 @@ public class GeminiService {
             ArrayNode parts = content.putArray("parts");
             parts.addObject().put("text", prompt);
 
-            // Generation config for structured output
             ObjectNode generationConfig = requestBody.putObject("generationConfig");
             generationConfig.put("temperature", 0.2);
             generationConfig.put("maxOutputTokens", 1024);
@@ -122,7 +120,7 @@ public class GeminiService {
             return extractTextFromResponse(responseBody);
 
         } catch (Exception e) {
-            logger.error("Gemini text generation failed: {}", e.getMessage(), e);
+            logger.error("[gemini] generateText failed: {}", e.getMessage());
             return null;
         }
     }
@@ -132,14 +130,12 @@ public class GeminiService {
      */
     public String generateChat(List<Map<String, String>> history) {
         if (!isAvailable()) {
-            logger.warn("Gemini is not available. Returning null.");
+            logger.warn("[gemini] generateChat called but Gemini is not available (no API key).");
             return null;
         }
 
         try {
-            String endpoint = credentials != null
-                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
-                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
+            String endpoint = API_BASE + model + ":generateContent?key=" + apiKey;
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             ArrayNode contents = requestBody.putArray("contents");
@@ -149,7 +145,6 @@ public class GeminiService {
                 if ("assistant".equals(role)) {
                     role = "model";
                 }
-                
                 ObjectNode content = contents.addObject();
                 content.put("role", role);
                 ArrayNode parts = content.putArray("parts");
@@ -164,7 +159,7 @@ public class GeminiService {
             return extractTextFromResponse(responseBody);
 
         } catch (Exception e) {
-            logger.error("Gemini chat generation failed: {}", e.getMessage(), e);
+            logger.error("[gemini] generateChat failed: {}", e.getMessage());
             return null;
         }
     }
@@ -174,27 +169,23 @@ public class GeminiService {
      */
     public String analyzeImage(String base64Image, String mimeType, String prompt) {
         if (!isAvailable()) {
-            logger.warn("Gemini is not available for image analysis.");
+            logger.warn("[gemini] analyzeImage called but Gemini is not available (no API key).");
             return null;
         }
 
         try {
-            String endpoint = credentials != null
-                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
-                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
+            String endpoint = API_BASE + model + ":generateContent?key=" + apiKey;
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             ArrayNode contents = requestBody.putArray("contents");
             ObjectNode content = contents.addObject();
             ArrayNode parts = content.putArray("parts");
 
-            // Image part
             ObjectNode imagePart = parts.addObject();
             ObjectNode inlineData = imagePart.putObject("inlineData");
             inlineData.put("mimeType", mimeType);
             inlineData.put("data", base64Image);
 
-            // Text prompt part
             parts.addObject().put("text", prompt);
 
             ObjectNode generationConfig = requestBody.putObject("generationConfig");
@@ -205,75 +196,44 @@ public class GeminiService {
             return extractTextFromResponse(responseBody);
 
         } catch (Exception e) {
-            logger.error("Gemini image analysis failed: {}", e.getMessage(), e);
+            logger.error("[gemini] analyzeImage failed: {}", e.getMessage());
             return null;
         }
     }
 
     /**
-     * Generate an embedding vector for the given text.
+     * Generate an embedding vector for the given text using the Developer API.
+     *
+     * <p>Uses the {@code embedContent} endpoint:
+     * {@code /v1beta/models/{embeddingModel}:embedContent?key={apiKey}}
+     *
+     * <p>Response shape: {@code { "embedding": { "values": [float, ...] } }}
+     * This is the Developer API response format, not the Vertex AI format.
      */
     public List<Double> generateEmbedding(String text) {
         if (!isAvailable()) {
-            logger.warn("Gemini is not available for embeddings.");
+            logger.warn("[gemini] generateEmbedding called but Gemini is not available (no API key).");
             return null;
         }
 
         try {
-            boolean isVertex = credentials != null;
-            String endpoint = isVertex
-                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict", location, projectId, location, embeddingModel)
-                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s", embeddingModel, apiKey);
+            // Developer API embedContent endpoint
+            String endpoint = API_BASE + embeddingModel + ":embedContent?key=" + apiKey;
 
             ObjectNode requestBody = objectMapper.createObjectNode();
-            
-            if (isVertex) {
-                ArrayNode instances = requestBody.putArray("instances");
-                ObjectNode instance = instances.addObject();
-                instance.put("content", text);
-                instance.put("task_type", "RETRIEVAL_DOCUMENT");
-            } else {
-                requestBody.put("model", "models/" + embeddingModel);
-                ObjectNode contentNode = requestBody.putObject("content");
-                ArrayNode partsNode = contentNode.putArray("parts");
-                partsNode.addObject().put("text", text);
-            }
+            // Required: model field with models/ prefix
+            requestBody.put("model", "models/" + embeddingModel);
+            ObjectNode contentNode = requestBody.putObject("content");
+            ArrayNode partsNode = contentNode.putArray("parts");
+            partsNode.addObject().put("text", text);
+            // Request explicit output dimensionality for gemini-embedding-2 to remain backwards compatible with existing 768 vector spaces
+            requestBody.put("outputDimensionality", 768);
 
             String responseBody = callGeminiApi(endpoint, requestBody.toString());
-            return extractEmbeddingFromResponse(responseBody, isVertex);
+            return extractEmbeddingFromResponse(responseBody);
 
         } catch (Exception e) {
-            logger.error("Gemini embedding generation failed: {}", e.getMessage(), e);
-            return null;
-        }
-    }
-
-    private List<Double> extractEmbeddingFromResponse(String responseBody, boolean isVertex) {
-        try {
-            JsonNode root = objectMapper.readTree(responseBody);
-            JsonNode values = null;
-            
-            if (isVertex) {
-                JsonNode predictions = root.path("predictions");
-                if (predictions.isArray() && !predictions.isEmpty()) {
-                    values = predictions.get(0).path("embeddings").path("values");
-                }
-            } else {
-                values = root.path("embedding").path("values");
-            }
-
-            if (values != null && values.isArray()) {
-                List<Double> embedding = new java.util.ArrayList<>();
-                for (JsonNode value : values) {
-                    embedding.add(value.asDouble());
-                }
-                return embedding;
-            }
-            
-            logger.warn("No embedding values found in Gemini response.");
-            return null;
-        } catch (Exception e) {
-            logger.error("Failed to parse Gemini embedding response: {}", e.getMessage());
+            logger.error("[gemini] generateEmbedding failed: {}", e.getMessage());
             return null;
         }
     }
@@ -287,7 +247,6 @@ public class GeminiService {
         }
 
         try {
-            // Strip markdown code fences if present (```json ... ```)
             String cleaned = geminiResponse.trim();
             if (cleaned.startsWith("```")) {
                 int firstNewline = cleaned.indexOf('\n');
@@ -301,30 +260,25 @@ public class GeminiService {
             }
             return objectMapper.readTree(cleaned);
         } catch (Exception e) {
-            logger.warn("Failed to parse Gemini JSON response: {}", e.getMessage());
+            logger.warn("[gemini] Failed to parse JSON response: {}", e.getMessage());
             return null;
         }
     }
 
+    // ----- private helpers -----
+
     private String callGeminiApi(String endpoint, String body) throws Exception {
-        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+        HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(30))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body));
-
-        if (credentials != null) {
-            credentials.refreshIfExpired();
-            AccessToken token = credentials.getAccessToken();
-            requestBuilder.header("Authorization", "Bearer " + token.getTokenValue());
-        }
-
-        HttpRequest request = requestBuilder.build();
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            logger.error("Gemini API returned status {}: {}", response.statusCode(), response.body());
+            logger.error("[gemini] API returned status {}", response.statusCode());
             throw new RuntimeException("Gemini API returned status " + response.statusCode());
         }
 
@@ -341,10 +295,36 @@ public class GeminiService {
                     return parts.get(0).path("text").asText();
                 }
             }
-            logger.warn("No text found in Gemini response structure.");
+            logger.warn("[gemini] No text found in response structure.");
             return null;
         } catch (Exception e) {
-            logger.error("Failed to parse Gemini response: {}", e.getMessage());
+            logger.error("[gemini] Failed to parse response: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract embedding values from the Developer API embedContent response.
+     * Expected shape: {@code { "embedding": { "values": [0.1, 0.2, ...] } }}
+     */
+    private List<Double> extractEmbeddingFromResponse(String responseBody) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            // Developer API: root.embedding.values
+            JsonNode values = root.path("embedding").path("values");
+
+            if (values.isArray() && !values.isEmpty()) {
+                List<Double> embedding = new ArrayList<>();
+                for (JsonNode value : values) {
+                    embedding.add(value.asDouble());
+                }
+                return embedding;
+            }
+
+            logger.warn("[gemini] No embedding values found in response.");
+            return null;
+        } catch (Exception e) {
+            logger.error("[gemini] Failed to parse embedding response: {}", e.getMessage());
             return null;
         }
     }

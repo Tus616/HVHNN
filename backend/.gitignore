@@ -42,7 +42,7 @@ src/main/resources/firebase/*.json
 *serviceAccount*.json
 
 # Secrets
-src/main/resources/application.properties
+
 
 # Temporary files
 *.tmp

@@ -6,13 +6,9 @@ import com.hvhn.backend.repository.EmailOtpChallengeRepository;
 import com.hvhn.backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.mail.MailException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -34,7 +30,7 @@ public class EmailOtpService {
     private final UserRepository userRepository;
     private final EmailOtpChallengeRepository challengeRepository;
     private final PasswordEncoder passwordEncoder;
-    private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final MailjetEmailService mailjetEmailService;
     private final String fromAddress;
     private final Duration otpLifetime;
     private final Duration resendCooldown;
@@ -47,8 +43,8 @@ public class EmailOtpService {
             UserRepository userRepository,
             EmailOtpChallengeRepository challengeRepository,
             PasswordEncoder passwordEncoder,
-            ObjectProvider<JavaMailSender> mailSenderProvider,
-            @Value("${app.mail.from:${spring.mail.username:}}") String fromAddress,
+            MailjetEmailService mailjetEmailService,
+            @Value("${app.mail.from:}") String fromAddress,
             @Value("${app.otp.expiry-seconds:300}") long otpExpirySeconds,
             @Value("${app.otp.resend-cooldown-seconds:30}") long resendCooldownSeconds,
             @Value("${app.otp.rate-window-seconds:3600}") long requestWindowSeconds,
@@ -58,7 +54,7 @@ public class EmailOtpService {
                 userRepository,
                 challengeRepository,
                 passwordEncoder,
-                mailSenderProvider,
+                mailjetEmailService,
                 fromAddress,
                 otpExpirySeconds,
                 resendCooldownSeconds,
@@ -72,7 +68,7 @@ public class EmailOtpService {
             UserRepository userRepository,
             EmailOtpChallengeRepository challengeRepository,
             PasswordEncoder passwordEncoder,
-            ObjectProvider<JavaMailSender> mailSenderProvider,
+            MailjetEmailService mailjetEmailService,
             String fromAddress,
             long otpExpirySeconds,
             long resendCooldownSeconds,
@@ -83,7 +79,7 @@ public class EmailOtpService {
         this.userRepository = userRepository;
         this.challengeRepository = challengeRepository;
         this.passwordEncoder = passwordEncoder;
-        this.mailSenderProvider = mailSenderProvider;
+        this.mailjetEmailService = mailjetEmailService;
         this.fromAddress = fromAddress;
         this.otpLifetime = Duration.ofSeconds(otpExpirySeconds);
         this.resendCooldown = Duration.ofSeconds(resendCooldownSeconds);
@@ -111,7 +107,6 @@ public class EmailOtpService {
         if (active != null && active.getLastSentAt() != null) {
             Instant nextAllowed = active.getLastSentAt().plus(resendCooldown);
             if (now.isBefore(nextAllowed)) {
-                long waitSeconds = Math.max(1, Duration.between(now, nextAllowed).toSeconds());
                 throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                         "Please wait before requesting another OTP.");
             }
@@ -217,27 +212,18 @@ public class EmailOtpService {
     }
 
     private void trySendOtpEmail(String recipientEmail, String otp) {
-        if (!StringUtils.hasText(fromAddress)) {
-            log.warn("OTP email delivery is not configured because no from-address is set.");
+        if (!mailjetEmailService.isConfigured()) {
+            log.warn("[email] OTP email delivery skipped — Mailjet is not configured (MAILJET_API_KEY/SECRET/MAIL_FROM absent).");
             return;
         }
-
-        JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
-        if (mailSender == null) {
-            log.warn("OTP email delivery is not configured because JavaMailSender is unavailable.");
-            return;
-        }
-
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(fromAddress);
-        message.setTo(recipientEmail);
-        message.setSubject("Sahay verification code");
-        message.setText(buildOtpEmailBody(otp));
-
         try {
-            mailSender.send(message);
-        } catch (MailException exception) {
-            log.error("Failed to send OTP email to {}", recipientEmail, exception);
+            mailjetEmailService.sendEmail(
+                    recipientEmail,
+                    "Sahay verification code",
+                    buildOtpEmailBody(otp)
+            );
+        } catch (MailjetEmailService.EmailDeliveryException exception) {
+            log.error("[email] Failed to send OTP email. provider=Mailjet error=DELIVERY_FAILURE to=[redacted]");
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Could not send the OTP email. Try again later.");
         }
