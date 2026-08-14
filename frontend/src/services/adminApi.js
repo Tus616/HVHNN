@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { USE_MOCK_API } from './apiConfig';
 import {
   MOCK_ADMIN_ANALYTICS,
   MOCK_ADMIN_COMMUNITIES,
@@ -43,7 +44,9 @@ function notifyUnauthorized() {
 }
 
 function logAdminError(context, error) {
-  console.error(`[admin] ${context}`, error);
+  if (import.meta.env.DEV) {
+    console.warn(`[admin] ${context}`, error);
+  }
 }
 
 function clone(value) {
@@ -67,7 +70,7 @@ function titleCase(value) {
 function normalizeCategory(category) {
   const normalized = String(category || 'GENERAL').trim().toUpperCase();
 
-  if (normalized.includes('BLOOD')) return 'BLOOD';
+  if (normalized.includes('BLOOD')) return 'BLOOD_DONATION';
   if (normalized.includes('MEDICAL')) return 'MEDICAL';
   if (normalized.includes('FOOD')) return 'FOOD';
 
@@ -122,7 +125,7 @@ function normalizeRequestItem(item, index = 0) {
     createdAt,
     description: item.description || item.aiSummary || item.notes || 'No additional details available.',
     communityId,
-    communityName: communityName || 'HVHN Network',
+    communityName: communityName || 'Sahay Network',
     flagged: Boolean(item.flagged),
   };
 }
@@ -133,7 +136,7 @@ function normalizeUserItem(item, index = 0) {
   const blocked = Boolean(item.blocked);
   const role = normalizeUserRole(item.role);
   const communityId = String(item.communityId || item.community?.id || item.communityId || '');
-  const communityName = item.community || item.communityName || item.community?.name || 'HVHN Network';
+  const communityName = item.community || item.communityName || item.community?.name || 'Sahay Network';
 
   return {
     id: String(id),
@@ -217,7 +220,7 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
     const response = await requestFactory();
     const nextData = transform ? transform(response.data) : response.data;
 
-    if (allowEmptyFallback && isEmptyCollection(nextData)) {
+    if (USE_MOCK_API && allowEmptyFallback && isEmptyCollection(nextData)) {
       return {
         data: clone(fallbackValue),
         fallback: true,
@@ -237,6 +240,10 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
     }
 
     logAdminError(context, error);
+
+    if (!USE_MOCK_API) {
+      throw error;
+    }
 
     return {
       data: clone(fallbackValue),
@@ -364,8 +371,8 @@ function deriveOverviewStats(requests, users) {
   }).length;
 
   return {
-    totalRequestsToday: totalRequestsToday || MOCK_ADMIN_STATS.totalRequestsToday,
-    activeVolunteers: activeVolunteers || MOCK_ADMIN_STATS.activeVolunteers,
+    totalRequestsToday,
+    activeVolunteers,
     pendingRequests,
     resolvedRequests,
     totalMembers: userArr.length,
@@ -431,7 +438,10 @@ function deriveAnalytics(requests, users) {
   const lastSevenDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const requestBuckets = lastSevenDays.map((dayLabel, index) => ({
     day: dayLabel,
-    requests: 5 + ((reqArr.length + index * 3) % 16),
+    requests: reqArr.filter((request) => {
+      const createdAt = new Date(request.createdAt);
+      return Number.isFinite(createdAt.getTime()) && createdAt.getDay() === index;
+    }).length,
   }));
 
   const categoryCounts = reqArr.reduce((accumulator, request) => {
@@ -440,7 +450,7 @@ function deriveAnalytics(requests, users) {
   }, {});
 
   const categoryBreakdown = [
-    { name: 'Blood', value: categoryCounts.BLOOD || 0, color: '#ef4444' },
+    { name: 'Blood donation', value: categoryCounts.BLOOD_DONATION || categoryCounts.BLOOD || 0, color: '#ef4444' },
     { name: 'Medical', value: categoryCounts.MEDICAL || 0, color: '#3b82f6' },
     { name: 'Food', value: categoryCounts.FOOD || 0, color: '#22c55e' },
     { name: 'General', value: categoryCounts.GENERAL || 0, color: '#9ca3af' },
@@ -459,11 +469,9 @@ function deriveAnalytics(requests, users) {
 
   return {
     requestsPerDay: requestBuckets,
-    categoryBreakdown: categoryBreakdown.some((item) => item.value > 0)
-      ? categoryBreakdown
-      : clone(MOCK_ADMIN_ANALYTICS.categoryBreakdown),
-    averageResponseTime: `${8 + (reqArr.length % 7)}m ${10 + (userArr.length % 45)}s`,
-    topVolunteers: topVolunteers.length > 0 ? topVolunteers : clone(MOCK_ADMIN_ANALYTICS.topVolunteers),
+    categoryBreakdown,
+    averageResponseTime: reqArr.length > 0 ? 'Measured by backend when available' : 'No completed requests yet',
+    topVolunteers,
   };
 }
 

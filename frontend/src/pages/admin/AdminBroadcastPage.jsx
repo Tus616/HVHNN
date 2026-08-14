@@ -4,6 +4,9 @@ import AdminEmptyState from '../../components/admin/AdminEmptyState';
 import AdminLoadingState from '../../components/admin/AdminLoadingState';
 import ConfirmDialog from '../../components/admin/ConfirmDialog';
 import { adminApi } from '../../services/adminApi';
+import { ErrorState } from '../../components/ui';
+import { formatDateTime } from '../../utils/displayFormat';
+import { normalizeApiError } from '../../utils/errors';
 
 const MESSAGE_LIMIT = 500;
 
@@ -14,6 +17,7 @@ export default function AdminBroadcastPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [error, setError] = useState('');
   const [form, setForm] = useState({
     message: '',
     targetType: adminRole === 'COMMUNITY_ADMIN' ? 'SPECIFIC' : 'ALL',
@@ -27,6 +31,7 @@ export default function AdminBroadcastPage() {
       setLoading(true);
 
       try {
+        setError('');
         const [communityResponse, historyResponse] = await Promise.all([
           adminApi.getCommunities(user),
           adminApi.getBroadcastHistory(user),
@@ -46,7 +51,7 @@ export default function AdminBroadcastPage() {
         }
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load broadcast center.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -77,8 +82,7 @@ export default function AdminBroadcastPage() {
       });
       showToast({ type: 'success', title: 'Broadcast sent', message: 'Your message is now in broadcast history.' });
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Broadcast failed', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Broadcast failed', message: normalizeApiError(error, 'Please try again.').message });
     } finally {
       setSending(false);
       setShowConfirm(false);
@@ -87,6 +91,10 @@ export default function AdminBroadcastPage() {
 
   if (loading) {
     return <AdminLoadingState label="Loading broadcast center..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
   }
 
   return (
@@ -198,7 +206,7 @@ export default function AdminBroadcastPage() {
                     <td>{entry.message.length > 90 ? `${entry.message.slice(0, 90)}...` : entry.message}</td>
                     <td>{entry.targetLabel}</td>
                     <td>{entry.sentBy}</td>
-                    <td>{new Date(entry.sentAt).toLocaleString()}</td>
+                    <td>{formatDateTime(entry.sentAt)}</td>
                   </tr>
                 ))}
               </tbody>

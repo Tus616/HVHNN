@@ -1,428 +1,645 @@
-// FEATURE: Search in Help Feed + SOS Emergency + Request Expiry + Bookmarks + Share
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, Bell, CheckCircle2, Clock, Filter, HeartHandshake, LocateFixed, MapPin, Plus, RotateCcw, Search, ShieldCheck, X } from 'lucide-react';
+import L from 'leaflet';
+import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import apiService from '../services/api';
-import useBookmarks from '../hooks/useBookmarks';
+import { normalizeApiError } from '../utils/errors';
 import { timeAgo } from '../utils/timeUtils';
-import VerificationBadge from '../components/VerificationBadge';
-import EmptyState from '../components/EmptyState';
-import communityImage from '../assets/community.png';
-import searchImage from '../assets/search.png';
+import { Badge, Button, EmptyState, ErrorState, IconButton, Skeleton, UrgencyBadge } from '../components/ui';
+import LocationAutocompleteInput from '../components/LocationAutocompleteInput';
 
+const CATEGORIES = ['BLOOD_DONATION', 'MEDICAL', 'FOOD', 'TRANSPORT', 'EMERGENCY', 'GENERAL'];
+const URGENCIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
+const CATEGORY_LABELS = {
+  BLOOD_DONATION: 'Blood',
+  MEDICAL: 'Medical',
+  FOOD: 'Food',
+  TRANSPORT: 'Transport',
+  EMERGENCY: 'Emergency',
+  GENERAL: 'General',
+};
 
-const CATEGORIES = ['ALL', 'SAVED', 'BLOOD_DONATION', 'MEDICAL', 'FOOD', 'TRANSPORT', 'EMERGENCY', 'GENERAL'];
-const CATEGORY_ICONS = { BLOOD_DONATION: '🩸', MEDICAL: '🏥', FOOD: '🍲', TRANSPORT: '🚗', EMERGENCY: '🚨', GENERAL: '📋' };
-
-const URGENCY_CLASS = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low' };
-
-function shareRequest(req, e) {
-  e.preventDefault();
-  e.stopPropagation();
-  const url = `${window.location.origin}/request/${req.id}`;
-  const text = `${req.title} — Help needed via HVHN`;
-  if (navigator.share) {
-    navigator.share({ title: text, url }).catch(() => {});
-  } else {
-    navigator.clipboard.writeText(`${text}\n${url}`).then(
-      () => alert('Link copied!'),
-      () => {}
-    );
-  }
+function compactLocation(request) {
+  return [request.address || request.location, request.city, request.district, request.state].filter(Boolean).slice(0, 2).join(', ') || 'Location shared after acceptance';
 }
 
-function getExpiryInfo(request) {
-  if (!request.createdAt) return null;
-  const created = new Date(request.createdAt).getTime();
-  const urgencyHours = { CRITICAL: 24, HIGH: 24, MEDIUM: 72, LOW: 168 };
-  const hours = urgencyHours[request.urgency] || 72;
-  const expiresAt = created + hours * 3600000;
-  const remaining = expiresAt - Date.now();
+function requestMapPoint(request) {
+  let lat = request.safeLatitude ?? request.mapLatitude ?? request.publicLatitude ?? request.latitude;
+  let lng = request.safeLongitude ?? request.mapLongitude ?? request.publicLongitude ?? request.longitude;
 
-  if (remaining <= 0) return { expired: true, text: 'EXPIRED', className: 'badge-expired' };
+  if (lat == null || lng == null) {
+    if (request.location?.coordinates && Array.isArray(request.location.coordinates)) {
+      // GeoJSON is [lng, lat]
+      lng = request.location.coordinates[0];
+      lat = request.location.coordinates[1];
+    } else if (request.location?.x != null && request.location?.y != null) {
+      lng = request.location.x;
+      lat = request.location.y;
+    }
+  }
 
-  const hrs = Math.floor(remaining / 3600000);
-  const mins = Math.floor((remaining % 3600000) / 60000);
-  let text, className;
-  if (hrs >= 6) { text = `Expires in ${hrs}h ${mins}m`; className = 'expiry-green'; }
-  else if (hrs >= 2) { text = `Expires in ${hrs}h ${mins}m`; className = 'expiry-yellow'; }
-  else { text = `Expires in ${hrs > 0 ? hrs + 'h ' : ''}${mins}m`; className = 'expiry-red'; }
+  const latitude = Number(lat);
+  const longitude = Number(lng);
 
-  return { expired: false, text, className };
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return [latitude, longitude];
+}
+
+function distanceKmBetween(left, right) {
+  if (!left || !right) return null;
+  const [lat1, lon1] = left.map(Number);
+  const [lat2, lon2] = right.map(Number);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return earthKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function canAccept(request, user) {
+  const requesterId = request.requester?.id || request.requesterId || request.userId;
+  const status = String(request.status || 'OPEN').toUpperCase();
+  return user?.isVolunteer && status === 'OPEN' && String(requesterId) !== String(user?.userId || user?.id) && request.canAccept !== false;
+}
+
+function RequestCard({ request, user, onAccept, accepting }) {
+  const location = compactLocation(request);
+  const description = String(request.description || request.aiSummary || 'No description provided.').slice(0, 95);
+  const helperSource = request.acceptedVolunteers || request.volunteers || request.helpers || [];
+  const helperList = Array.isArray(helperSource) ? helperSource : [];
+  const helpers = [request.requester, ...helperList].filter(Boolean).slice(0, 5);
+  const helperCount = Number(request.helperCount ?? request.acceptedCount ?? request.volunteerCount ?? helpers.length) || helpers.length;
+  return (
+    <article className={`p7-request-card p7-request-card--${String(request.urgency || 'MEDIUM').toLowerCase()}`}>
+      <div className="p7-request-card__accent" aria-hidden="true" />
+      <div className="p7-request-card__top">
+        <div className="p7-request-card__badges">
+          <UrgencyBadge urgency={request.urgency} />
+        </div>
+        <span className="p7-request-card__time"><Clock size={15} /> {timeAgo(request.createdAtEpochMs || request.createdAt)}</span>
+      </div>
+      <h2>{request.title || 'Help request'}</h2>
+      <p>{description}{description.length >= 95 ? '...' : ''}</p>
+      <div className="p7-request-card__meta">
+        <span className="p7-mini-chip">{CATEGORY_LABELS[request.category] || request.category || 'General'}</span>
+        {request.community?.name && <span className="p7-mini-chip p7-mini-chip--blue">{request.community.name}</span>}
+      </div>
+      <div className="p7-request-card__meta p7-request-card__distance">
+        {request.distanceKm != null && <span><LocateFixed size={16} /> {Number(request.distanceKm).toFixed(1)} km away</span>}
+        {request.distanceKm == null && <span><MapPin size={16} /> {location}</span>}
+      </div>
+      {helperCount > 0 && (
+        <div className="p7-helper-strip">
+          <div className="p7-helper-avatars" aria-hidden="true">
+            {helpers.map((helper, index) => (
+              <span key={helper.id || helper.userId || helper.email || index}>
+                {(helper.fullName || helper.name || helper.email || 'H').charAt(0).toUpperCase()}
+              </span>
+            ))}
+          </div>
+          <small>{helperCount} helper{helperCount === 1 ? '' : 's'}</small>
+        </div>
+      )}
+      <div className="p7-request-card__footer">
+        <Button to={`/request/${request.id}`} variant="secondary">View Details</Button>
+        {canAccept(request, user) && (
+          <div>
+          {canAccept(request, user) && (
+            <Button type="button" onClick={() => onAccept(request)} loading={accepting === request.id}>
+              <HeartHandshake size={16} /> Accept
+            </Button>
+          )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function RecentActivity({ notifications = [], requests = [] }) {
+  const notificationItems = notifications.slice(0, 6).map((notification) => ({
+    id: `notification-${notification.id}`,
+    title: notification.title || 'Sahay notification',
+    detail: notification.message || '',
+    time: notification.time || notification.createdAt,
+    type: notification.read ? 'info' : 'urgent',
+  }));
+  const requestItems = requests.slice(0, 6).map((request) => ({
+    id: `request-${request.id}`,
+    title: `${CATEGORY_LABELS[request.category] || request.category || 'General'} request`,
+    detail: `${CATEGORY_LABELS[request.category] || request.category || 'General'} request ${String(request.status || 'OPEN').toLowerCase()}`,
+    time: request.updatedAt || request.createdAtEpochMs || request.createdAt,
+    type: String(request.status || '').toUpperCase() === 'COMPLETED' ? 'success' : 'info',
+  }));
+  const items = notificationItems.length > 0 ? notificationItems : requestItems;
+
+  return (
+    <section className="p7-recent-activity" aria-label="Recent activity">
+      <div className="p7-map-card__header">
+        <h2>Recent Activity</h2>
+      </div>
+      <div className="p7-activity-list">
+        {items.length === 0 ? (
+          <div className="p7-activity-empty">No recent activity yet.</div>
+        ) : items.map((item) => (
+          <div key={item.id} className="p7-activity-item">
+            <span className={`p7-activity-icon is-${item.type}`}>
+              {item.type === 'success' ? <CheckCircle2 size={15} /> : item.type === 'urgent' ? <Bell size={15} /> : <Plus size={15} />}
+            </span>
+            <span>
+              <strong>{item.title}</strong>
+              {item.detail && <small>{item.detail}</small>}
+              <time>{timeAgo(item.time)}</time>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <article className="p7-request-card p7-request-card--skeleton" aria-hidden="true">
+      <div className="p7-request-card__accent" />
+      <Skeleton lines={5} />
+    </article>
+  );
+}
+
+function MapAutoFit({ points, center, radiusKm }) {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+    if (center && Number.isFinite(Number(radiusKm))) {
+      const latRadius = Number(radiusKm) / 111;
+      const lngRadius = latRadius / Math.max(0.2, Math.cos((center[0] * Math.PI) / 180));
+      map.fitBounds([
+        [center[0] - latRadius, center[1] - lngRadius],
+        [center[0] + latRadius, center[1] + lngRadius],
+      ], { padding: [28, 28], maxZoom: 13 });
+      return;
+    }
+    const coords = points.filter(Boolean);
+    if (coords.length > 1) {
+      map.fitBounds(coords, { padding: [28, 28], maxZoom: 13 });
+    } else if (coords[0]) {
+      map.setView(coords[0], 12);
+    }
+
+  }, [map, points, center, radiusKm]);
+  return null;
+}
+
+function mapIcon(color, className) {
+  return L.divIcon({
+    className: `p7-map-pin ${className}`,
+    html: `<span style="background:${color}"></span>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -12],
+  });
+}
+
+function NearbyRequestMap({ requests, filters, user }) {
+  const icons = useMemo(() => ({
+    user: mapIcon('#168bff', 'is-user'),
+    request: mapIcon('#ff6b00', 'is-request'),
+    high: mapIcon('#ef4444', 'is-high'),
+  }), []);
+  const userCenter = Number.isFinite(Number(filters.latitude)) && Number.isFinite(Number(filters.longitude))
+    ? [Number(filters.latitude), Number(filters.longitude)]
+    : Number.isFinite(Number(user?.latitude)) && Number.isFinite(Number(user?.longitude))
+      ? [Number(user.latitude), Number(user.longitude)]
+      : null;
+  const markers = requests
+    .map((request) => {
+      const point = requestMapPoint(request);
+      return {
+        request,
+        point,
+        distanceKm: request.distanceKm != null ? Number(request.distanceKm) : distanceKmBetween(userCenter, point),
+      };
+    })
+    .filter((item) => item.point);
+  const center = userCenter || markers[0]?.point || [28.6139, 77.2090];
+  const radiusKm = [5, 10, 25, 50].includes(Number(filters.radiusKm)) ? Number(filters.radiusKm) : 10;
+  const isJsdom = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '');
+
+  if (isJsdom) {
+    return (
+      <section className="p7-map-card" aria-label="Requests near you">
+        <div className="p7-map-card__header">
+          <div>
+            <h2>Help Requests Near You</h2>
+            <p>See nearby open help requests on the map.</p>
+          </div>
+          <Badge variant="info">{markers.length} mapped</Badge>
+        </div>
+        <div className="p7-request-map p7-request-map--static">
+          {userCenter && <span>{radiusKm} km selected radius</span>}
+          {markers.length === 0 ? 'No mapped open requests match these filters yet.' : markers.map(({ request }) => (
+            <Link key={request.id} to={`/request/${request.id}`}>View Request</Link>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="p7-map-card" aria-label="Requests near you">
+      <div className="p7-map-card__header">
+        <div>
+          <h2>Help Requests Near You</h2>
+          <p>See nearby open help requests on the map.</p>
+        </div>
+        <Badge variant="info">{markers.length} mapped</Badge>
+      </div>
+      <MapContainer center={center} zoom={userCenter ? 12 : 10} className="p7-request-map" scrollWheelZoom={false}>
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          maxZoom={19}
+        />
+        <MapAutoFit points={markers.map((item) => item.point)} center={userCenter} radiusKm={radiusKm} />
+        {userCenter && (
+          <>
+            <Circle center={userCenter} radius={radiusKm * 1000} pathOptions={{ color: '#168bff', fillColor: '#168bff', fillOpacity: 0.05, weight: 2 }} />
+            <Marker position={userCenter} icon={icons.user}>
+              <Popup>Your location</Popup>
+            </Marker>
+          </>
+        )}
+        {markers.map(({ request, point, distanceKm }) => (
+          <Marker
+            key={request.id}
+            position={point}
+            icon={String(request.urgency || '').toUpperCase() === 'HIGH' || String(request.urgency || '').toUpperCase() === 'CRITICAL' || String(request.category || '').toUpperCase() === 'EMERGENCY' ? icons.high : icons.request}
+          >
+            <Popup>
+              <div className="p7-map-popup">
+                <strong>{request.title || 'Help request'}</strong>
+                <span>{CATEGORY_LABELS[request.category] || request.category || 'General'} · {request.urgency || 'MEDIUM'}</span>
+                <small>{compactLocation(request)}</small>
+                {Number.isFinite(distanceKm) && <small>{distanceKm.toFixed(1)} km away</small>}
+                <Link to={`/request/${request.id}`}>View Request</Link>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+      <div className="p7-map-legend" aria-label="Map legend">
+        <span><i className="is-user" /> Your location</span>
+        <span><i className="is-request" /> Request</span>
+        <span><i className="is-high" /> High urgency</span>
+        <span><i className="is-low" /> Low urgency</span>
+      </div>
+      {markers.length === 0 && <div className="p7-map-empty">No mapped open requests match these filters yet.</div>}
+    </section>
+  );
+}
+
+function FilterChip({ label, value, onRemove }) {
+  return (
+    <button type="button" onClick={onRemove} aria-label={`Remove ${label} filter`}>
+      <span>{label}: {value}</span>
+      <X size={14} aria-hidden="true" />
+    </button>
+  );
 }
 
 export default function Feed() {
   const { user } = useAuth();
-  const { notifyRequestCreated } = useNotifications();
-  const navigate = useNavigate();
+  const { notifications = [], showToast, notifyRequestAccepted } = useNotifications();
   const [requests, setRequests] = useState([]);
-  const [filter, setFilter] = useState('ALL');
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [showSOS, setShowSOS] = useState(false);
-  const [sosDesc, setSosDesc] = useState('');
-  const [sosLoading, setSosLoading] = useState(false);
-  const [sosSuccess, setSosSuccess] = useState(false);
-  const [toast, setToast] = useState(null);
-  const { bookmarks, isBookmarked, toggleBookmark } = useBookmarks();
-  const [pinnedAnnouncements, setPinnedAnnouncements] = useState([]);
-  const [dismissedAnnIds, setDismissedAnnIds] = useState([]);
-  const debounceRef = useRef(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [mode, setMode] = useState('all');
+  const [filtersOpen, setFiltersOpen] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 901px)').matches
+      : true
+  ));
+  const [accepting, setAccepting] = useState('');
+  const [locationStatus, setLocationStatus] = useState('Use browser location or manual area filters for nearby results.');
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [smartSearch, setSmartSearch] = useState({ query: '', results: [], available: false });
+  const [filters, setFilters] = useState({
+    search: '',
+    radiusKm: '10',
+    category: '',
+    urgency: '',
+    city: '',
+    district: '',
+    state: '',
+    latitude: '',
+    longitude: '',
+  });
 
-  useEffect(() => { 
-    loadRequests(); 
-    loadPinnedAnnouncements();
-  }, []);
-
-  // Update expiry timestamps every minute
-  useEffect(() => {
-    const timer = setInterval(() => setRequests(r => [...r]), 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Debounce search
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebouncedSearch(search), 500);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [search]);
-
-  const loadRequests = async () => {
+  const loadAll = async () => {
+    setError(null);
+    setLoading(true);
     try {
-      const res = await apiService.getOpenRequests();
-      // Backend may return a paginated object ({ content: [...] }) — normalise defensively
-      const raw = res.data;
-      const items = Array.isArray(raw)
-        ? raw
-        : Array.isArray(raw?.content)
-          ? raw.content
-          : [];
-      setRequests(items);
+      const response = await apiService.getOpenRequests();
+      const data = response.data;
+      setRequests(Array.isArray(data) ? data : Array.isArray(data?.content) ? data.content : []);
+      setMode('all');
     } catch (err) {
-      console.error(err);
-      showToast(err.message || 'Failed to load requests', 'error');
+      setError(normalizeApiError(err, 'Could not load help requests.'));
     } finally {
       setLoading(false);
     }
   };
 
-  const loadPinnedAnnouncements = async () => {
-    try {
-      const res = await apiService.getPinnedAnnouncements();
-      setPinnedAnnouncements(res.data || []);
-    } catch (err) {
-      console.error('Failed to load pinned announcements', err);
+  useEffect(() => {
+    loadAll();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia('(min-width: 901px)');
+    const syncFilters = () => setFiltersOpen(query.matches);
+    syncFilters();
+    if (typeof query.addEventListener === 'function') {
+      query.addEventListener('change', syncFilters);
+      return () => query.removeEventListener('change', syncFilters);
     }
-  };
+    query.addListener(syncFilters);
+    return () => query.removeListener(syncFilters);
+  }, []);
 
-  const { showToast } = useNotifications();
+  const baseFiltered = useMemo(() => {
+    const center = Number.isFinite(Number(filters.latitude)) && Number.isFinite(Number(filters.longitude))
+      ? [Number(filters.latitude), Number(filters.longitude)]
+      : Number.isFinite(Number(user?.latitude)) && Number.isFinite(Number(user?.longitude))
+        ? [Number(user.latitude), Number(user.longitude)]
+        : null;
+    const radiusKm = Number(filters.radiusKm || 10);
+    return requests.filter((request) => {
+      const matchesCategory = !filters.category || request.category === filters.category;
+      const matchesUrgency = !filters.urgency || request.urgency === filters.urgency;
+      const matchesCity = !filters.city || String(request.city || '').toLowerCase().includes(filters.city.toLowerCase());
+      const matchesDistrict = !filters.district || String(request.district || '').toLowerCase().includes(filters.district.toLowerCase());
+      const matchesState = !filters.state || String(request.state || '').toLowerCase().includes(filters.state.toLowerCase());
+      const point = requestMapPoint(request);
+      const distance = request.distanceKm != null ? Number(request.distanceKm) : distanceKmBetween(center, point);
+      const matchesRadius = !center || !Number.isFinite(radiusKm) || 
+        (Number.isFinite(distance) ? distance <= radiusKm : true);
+      return matchesCategory && matchesUrgency && matchesCity && matchesDistrict && matchesState && matchesRadius;
+    });
+  }, [requests, filters, user?.latitude, user?.longitude]);
 
-
-  const handleSOS = async (e) => {
-    e.preventDefault();
-    if (!sosDesc.trim()) { showToast('Please describe your emergency', 'error'); return; }
-    setSosLoading(true);
-
-    try {
-      let lat = null, lng = null;
+  useEffect(() => {
+    const query = filters.search.trim();
+    if (query.length < 2 || baseFiltered.length === 0) {
+      setSmartSearch({ query, results: [], available: false });
+      return undefined;
+    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
       try {
-        const pos = await new Promise((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
-        );
-        lat = pos.coords.latitude;
-        lng = pos.coords.longitude;
-      } catch { /* location not critical for SOS */ }
+        const candidates = baseFiltered.slice(0, 100).map((request) => ({
+          id: request.id,
+          title: request.title,
+          description: request.description,
+          category: request.category,
+          status: request.status,
+        }));
+        const response = await apiService.smartSearchRequests(query, candidates);
+        if (!active) return;
+        const data = response.data || {};
+        setSmartSearch({
+          query,
+          results: Array.isArray(data.results) ? data.results : [],
+          available: Boolean(data.available),
+        });
+      } catch {
+        if (active) setSmartSearch({ query, results: [], available: false });
+      }
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [filters.search, baseFiltered]);
 
-      const res = await apiService.createRequest({
-        title: '🚨 SOS: ' + sosDesc.trim(),
-        description: 'EMERGENCY SOS — ' + sosDesc.trim(),
-        category: 'EMERGENCY',
-        urgency: 'CRITICAL',
-        latitude: lat,
-        longitude: lng,
-        address: lat ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : 'GPS location shared',
-      }, user);
-
-      showToast('🚨 SOS sent! Volunteers are being notified.', 'success');
-      if (notifyRequestCreated) notifyRequestCreated(res.data);
-      setShowSOS(false);
-      setSosDesc('');
-      setSosSuccess(true);
-      setTimeout(() => setSosSuccess(false), 8000);
-      loadRequests();
-    } catch (err) {
-      showToast(err.message || 'Failed to send SOS', 'error');
-    } finally {
-      setSosLoading(false);
+  const filtered = useMemo(() => {
+    const query = filters.search.trim().toLowerCase();
+    if (!query) return baseFiltered;
+    if (smartSearch.available && smartSearch.query.toLowerCase() === query && smartSearch.results.length > 0) {
+      const rankById = new Map(smartSearch.results.map((item) => [String(item.requestId), item.rank]));
+      return baseFiltered
+        .filter((request) => rankById.has(String(request.id)))
+        .sort((left, right) => rankById.get(String(left.id)) - rankById.get(String(right.id)));
     }
+    return baseFiltered.filter((request) => [request.title, request.description, request.address, request.city, request.district, request.state]
+      .some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [baseFiltered, filters.search, smartSearch]);
+
+  const activeFilters = Object.entries(filters).filter(([key, value]) => (
+    value && !['latitude', 'longitude'].includes(key) && !(key === 'radiusKm' && value === '10')
+  ));
+
+  const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
+  const applyLocationFilterSuggestion = (suggestion) => {
+    setFilters((current) => ({
+      ...current,
+      city: suggestion.city || current.city,
+      district: suggestion.district || current.district,
+      state: suggestion.state || current.state,
+      latitude: Number.isFinite(suggestion.latitude) ? String(suggestion.latitude) : current.latitude,
+      longitude: Number.isFinite(suggestion.longitude) ? String(suggestion.longitude) : current.longitude,
+    }));
   };
 
-  const filterBySearch = (req) => {
-    if (!debouncedSearch.trim()) return true;
-    const q = debouncedSearch.toLowerCase();
-    return (
-      (req.title || '').toLowerCase().includes(q) ||
-      (req.description || '').toLowerCase().includes(q) ||
-      (req.address || '').toLowerCase().includes(q)
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationStatus('Browser location is unavailable. Add city, district, or state manually.');
+      return;
+    }
+    setLocationStatus('Requesting browser location...');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setFilters((current) => ({
+          ...current,
+          latitude: String(position.coords.latitude),
+          longitude: String(position.coords.longitude),
+        }));
+        setLocationStatus('Location attached. Nearby search will use your approximate position.');
+        setLocationDenied(false);
+      },
+      (geoError) => {
+        setLocationStatus(geoError.code === geoError.PERMISSION_DENIED
+          ? 'Location permission denied. Use city, district, or state filters instead.'
+          : 'Location unavailable. Retry or use manual filters.');
+        setLocationDenied(geoError.code === geoError.PERMISSION_DENIED);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
   };
 
-  const filtered = (() => {
-    let result = Array.isArray(requests) ? requests : [];
-    if (filter === 'SAVED') {
-      result = result.filter((r) => isBookmarked(r.id));
-    } else if (filter !== 'ALL') {
-      result = result.filter((r) => r.category === filter);
+  const loadNearby = async () => {
+    setMode('nearby');
+    setRefreshing(true);
+    setError(null);
+    try {
+      const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+      const response = await apiService.getNearbyRequests(params);
+      setRequests(Array.isArray(response.data) ? response.data : []);
+      setLocationStatus('Showing nearby results from your chosen location filters.');
+    } catch (err) {
+      setRequests([]);
+      setError(normalizeApiError(err, 'Could not load nearby requests.'));
+    } finally {
+      setRefreshing(false);
+      setLoading(false);
     }
-    return result.filter(filterBySearch);
-  })();
+  };
 
-  if (loading) return <div className="loading"><div className="spinner" /></div>;
+  const clearFilters = () => {
+    setFilters({ search: '', radiusKm: '10', category: '', urgency: '', city: '', district: '', state: '', latitude: '', longitude: '' });
+    setLocationDenied(false);
+    if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 900px)').matches) setFiltersOpen(false);
+    loadAll();
+  };
+
+  const handleAccept = async (request) => {
+    setAccepting(request.id);
+    try {
+      await apiService.acceptRequest(request.id, user);
+      notifyRequestAccepted?.(request, user?.fullName);
+      showToast({ type: 'success', title: 'Request accepted', message: 'The requester has been notified.' });
+      await loadAll();
+    } catch (err) {
+      const normalized = normalizeApiError(err, 'Could not accept this request.');
+      showToast({ type: 'error', title: 'Could not accept', message: normalized.message });
+    } finally {
+      setAccepting('');
+    }
+  };
+
+  const filterPanel = (
+    <div className="p7-filter-panel">
+      <label className="p7-search-box">
+        <Search size={18} aria-hidden="true" />
+        <input value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder="Search requests, locations, or descriptions" />
+      </label>
+      <select value={filters.radiusKm} onChange={(event) => updateFilter('radiusKm', event.target.value)} aria-label="Radius">
+        {[5, 10, 25, 50].map((value) => <option key={value} value={value}>{value} km</option>)}
+      </select>
+      <select value={filters.category} onChange={(event) => updateFilter('category', event.target.value)} aria-label="Category">
+        <option value="">Any category</option>
+        {CATEGORIES.map((category) => <option key={category} value={category}>{CATEGORY_LABELS[category]}</option>)}
+      </select>
+      <select value={filters.urgency} onChange={(event) => updateFilter('urgency', event.target.value)} aria-label="Urgency">
+        <option value="">Any urgency</option>
+        {URGENCIES.map((urgency) => <option key={urgency} value={urgency}>{urgency}</option>)}
+      </select>
+      <LocationAutocompleteInput className="ui-input" value={filters.city} onValueChange={(value) => updateFilter('city', value)} onSuggestionSelect={applyLocationFilterSuggestion} type="CITY" placeholder="City" />
+      <LocationAutocompleteInput className="ui-input" value={filters.district} onValueChange={(value) => updateFilter('district', value)} onSuggestionSelect={applyLocationFilterSuggestion} type="DISTRICT" placeholder="District" />
+      <LocationAutocompleteInput className="ui-input" value={filters.state} onValueChange={(value) => updateFilter('state', value)} onSuggestionSelect={applyLocationFilterSuggestion} type="STATE" placeholder="State" />
+      <Button type="button" variant="secondary" onClick={useCurrentLocation}><LocateFixed size={16} /> Use current location</Button>
+      <Button type="button" onClick={loadNearby} loading={refreshing}>Find Nearby</Button>
+      <Button type="button" variant="ghost" onClick={clearFilters}><RotateCcw size={16} /> Clear</Button>
+    </div>
+  );
 
   return (
-    <div className="animate-in">
-
-
-      <div className="page-header">
-        <div>
-          <h1>🆘 Help Feed</h1>
-          <p style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
-            {requests.length} active requests in your network
-          </p>
-        </div>
-        <Link to="/create" className="btn btn-primary">+ Raise Request</Link>
-      </div>
-
-      {(Array.isArray(pinnedAnnouncements) ? pinnedAnnouncements : []).filter(a => !dismissedAnnIds.includes(a.id)).map(ann => (
-        <div 
-          key={ann.id}
-          className="animate-in mb-6 p-4 rounded-xl border-l-[6px] border-amber-400 bg-amber-50 shadow-sm flex items-center gap-4 group"
-        >
-          <div className="text-2xl">📢</div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 bg-amber-100 px-2 py-0.5 rounded">Official Update</span>
-              <span className="text-xs text-amber-700/60 font-medium">{ann.authorName}</span>
-            </div>
-            <h4 className="text-sm font-bold text-amber-900 mt-1">{ann.title}</h4>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link 
-              to={`/community/${ann.communityId}`}
-              className="text-xs font-bold text-amber-700 bg-amber-200/50 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors"
-            >
-              Learn More
-            </Link>
-            <button 
-              onClick={() => setDismissedAnnIds([...dismissedAnnIds, ann.id])}
-              className="text-amber-400 hover:text-amber-600 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-              title="Dismiss"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {sosSuccess && (
-        <div 
-          className="animate-in" 
-          style={{ 
-            padding: '16px 20px', 
-            background: 'var(--success)', 
-            color: 'white', 
-            borderRadius: 'var(--radius-md)', 
-            marginBottom: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2)'
-          }}
-        >
-          <span style={{ fontSize: '1.5rem' }}>✅</span>
+    <div className="p7-feed">
+      <section className="p7-feed-board">
+        <div className="p7-feed-hero">
           <div>
-            <div style={{ fontWeight: 700 }}>SOS Sent Successfully!</div>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Your emergency contacts have been notified via email.</div>
+            <span className="p7-feed-kicker">Help Feed / Nearby</span>
+            <h1>Help Feed</h1>
+            <p>Find and support real help requests in your community.</p>
           </div>
-          <button 
-            onClick={() => setSosSuccess(false)} 
-            style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '1.2rem' }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Search and Filters */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <div className="search-bar-container" style={{ position: 'relative', flex: 1, minWidth: '300px' }}>
-          <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>🔍</span>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Search help requests..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ paddingLeft: '36px', borderRadius: 'var(--radius-full)', background: 'var(--bg-card)' }}
-          />
-        </div>
-        <button className="btn btn-secondary" onClick={() => setShowSOS(true)} style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
-          🚨 SOS Emergency
-        </button>
-      </div>
-
-      <div className="feed-filters">
-        {CATEGORIES.map(cat => (
-          <button key={cat} className={`filter-btn ${filter === cat ? 'active' : ''}`}
-            onClick={() => setFilter(cat)}>
-            {cat === 'ALL' ? '🌐 All' : cat === 'SAVED' ? `🔖 Saved (${bookmarks.length})` : `${CATEGORY_ICONS[cat] || ''} ${cat.replace('_', ' ')}`}
-          </button>
-        ))}
-      </div>
-
-      {filtered.length === 0 ? (
-        <EmptyState
-          type={debouncedSearch ? 'search' : 'requests'}
-          image={debouncedSearch ? searchImage : communityImage}
-          title={debouncedSearch ? `No results for "${debouncedSearch}"` : 'No requests nearby'}
-          message={debouncedSearch ? 'Try different keywords or clear the search filters.' : 'There are no active help requests in your area right now. Check back soon or go online to help!'}
-          actionLabel={debouncedSearch ? 'Clear Search' : 'Raise a Request'}
-          actionLink={debouncedSearch ? null : '/create'}
-          onAction={debouncedSearch ? () => setSearch('') : null}
-        />
-      ) : (
-
-
-        <div className="request-list">
-          {filtered.map(req => {
-            const expiry = getExpiryInfo(req);
-            return (
-              <div key={req.id} className="request-card-link-wrapper" style={{ position: 'relative' }}>
-                <button
-                  className={`bookmark-btn-overlay ${isBookmarked(req.id) ? 'active' : ''}`}
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleBookmark(req.id); }}
-                  title={isBookmarked(req.id) ? 'Remove bookmark' : 'Save request'}
-                  style={{
-                    position: 'absolute', top: '16px', right: '16px', zIndex: 10,
-                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 'var(--radius-sm)', padding: '6px', fontSize: '1.2rem',
-                    cursor: 'pointer', transition: 'all 0.2s',
-                    color: isBookmarked(req.id) ? 'var(--accent-primary)' : 'var(--text-muted)'
-                  }}
-                >
-                  {isBookmarked(req.id) ? '🔖' : '🔖'}
-                </button>
-                <Link to={`/request/${req.id}`} key={req.id} style={{ textDecoration: 'none', color: 'inherit' }}>
-                  <div className="request-card" data-urgency={expiry?.expired ? undefined : req.urgency}>
-                    <div className="request-header" style={{ paddingRight: '40px' }}>
-                      <div>
-                        <div className="request-title">{req.title}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          by {req.requester?.fullName || 'Anonymous'} 
-                          <VerificationBadge level={req.requester?.verificationLevel || (req.requester?.verified ? 'VERIFIED' : 'BASIC')} size="sm" />
-                          • {timeAgo(req.createdAtEpochMs || req.createdAt)}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        {expiry?.expired ? (
-                          <span className="badge badge-expired">EXPIRED</span>
-                        ) : (
-                          <span className={`badge ${URGENCY_CLASS[req.urgency] || ''}`}>{req.urgency}</span>
-                        )}
-                        <span className="badge badge-category">{CATEGORY_ICONS[req.category] || ''} {req.category?.replace('_', ' ')}</span>
-                        {req.category === 'BLOOD_DONATION' && req.requiredBloodGroup && (
-                          <span className="badge" style={{ background: 'var(--danger-color)', color: 'white', fontWeight: 'bold' }}>
-                            🩸 {req.requiredBloodGroup} Required
-                          </span>
-                        )}
-                        {req.requiredSkill && (
-                          <span className="badge" style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--accent-primary)', border: '1px solid rgba(59,130,246,0.3)', fontWeight: '600' }}>
-                            🎯 {req.requiredSkill.charAt(0) + req.requiredSkill.slice(1).toLowerCase()} Required
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="request-desc">{req.description}</div>
-                    <div className="request-meta">
-                      {req.address && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>📍 {req.address}</span>}
-                      {req.community && <span style={{ fontSize: '0.85rem', color: 'var(--accent-secondary)' }}>🏘️ {req.community.name}</span>}
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                        👁️ {(req.viewCount ?? req.views ?? 0)} views
-                      </span>
-                    </div>
-                    {req.aiSummary && (
-                      <div style={{ padding: '8px 12px', background: 'rgba(99,102,241,0.05)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--accent-primary)', border: '1px solid rgba(99,102,241,0.1)', marginBottom: '12px' }}>
-                        🤖 {req.aiSummary}
-                      </div>
-                    )}
-                    <div className="request-card-actions-row" style={{ marginTop: '16px', display: 'flex', gap: '12px' }}>
-                      <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: 'center' }}>
-                        🤝 I Can Help
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={(e) => shareRequest(req, e)}
-                        title="Share request"
-                        style={{ padding: '0 12px' }}
-                      >
-                        📤 Share
-                      </button>
-                    </div>
-                  </div>
-                </Link>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* SOS Floating Button */}
-      <button className="sos-float-btn" onClick={() => setShowSOS(true)} title="Send SOS Emergency">
-        SOS
-      </button>
-
-      {/* SOS Modal */}
-      {showSOS && (
-        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSOS(false); }}>
-          <div className="modal" style={{ maxWidth: '480px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0, color: '#ef4444' }}>🚨 Emergency SOS</h2>
-              <button className="btn btn-icon btn-secondary" onClick={() => setShowSOS(false)}>✕</button>
-            </div>
-
-            <div style={{ padding: '12px 16px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-md)', marginBottom: '20px', fontSize: '0.88rem', color: '#ef4444' }}>
-              ⚠️ This will create a <strong>CRITICAL EMERGENCY</strong> request and immediately notify <strong>ALL online volunteers</strong> in your community.
-            </div>
-
-            <form onSubmit={handleSOS}>
-              <div className="form-group">
-                <label className="form-label">Brief Description *</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g., Building fire, Medical emergency, Accident..."
-                  value={sosDesc}
-                  onChange={(e) => setSosDesc(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                📍 Your current GPS location will be auto-detected and shared.
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowSOS(false)}>Cancel</button>
-                <button type="submit" className="btn btn-danger" disabled={sosLoading} style={{ background: '#ef4444', color: 'white', border: 'none' }}>
-                  {sosLoading ? 'Sending...' : '🚨 Send SOS'}
-                </button>
-              </div>
-            </form>
+          <div className="p7-feed-hero__actions">
+            <Button type="button" variant="secondary" onClick={loadNearby} loading={refreshing}><ShieldCheck size={16} /> Nearby</Button>
+            <select value={filters.radiusKm} onChange={(event) => updateFilter('radiusKm', event.target.value)} aria-label="Radius">
+              {[5, 10, 25, 50].map((value) => <option key={value} value={value}>Radius: {value} km</option>)}
+            </select>
           </div>
         </div>
-      )}
+
+        <div className="p7-feed-actions-row">
+          <Button to="/create"><Plus size={16} /> Raise a Request</Button>
+          <label className="p7-search-box">
+            <Search size={18} aria-hidden="true" />
+            <input value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder="Search requests..." />
+          </label>
+          <IconButton label="Open filters" className="p7-filter-toggle" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}>
+            <Filter size={18} />
+          </IconButton>
+        </div>
+
+        {filtersOpen && (
+          <aside className="p7-feed-filters" aria-label="Request filters">
+            <div className="p7-panel-title">
+              <strong>Filters</strong>
+              <button type="button" onClick={clearFilters}>Clear all</button>
+            </div>
+            {filterPanel}
+          </aside>
+        )}
+
+        <div className="p7-feed-results">
+          {activeFilters.length > 0 && (
+            <div className="p7-filter-chips">
+              {activeFilters.map(([key, value]) => (
+                <FilterChip key={key} label={key} value={value} onRemove={() => updateFilter(key, key === 'radiusKm' ? '10' : '')} />
+              ))}
+            </div>
+          )}
+
+          {locationDenied && (
+            <div className="p7-location-denied" role="status">
+              <AlertTriangle size={18} />
+              <div>
+                <strong>Location permission is blocked</strong>
+                <p>Use city, district, or state filters for nearby help, retry browser location, or continue with all requests.</p>
+              </div>
+              <Button type="button" variant="secondary" onClick={useCurrentLocation}>Retry location</Button>
+              <Button type="button" variant="ghost" onClick={loadAll}>Continue without location</Button>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p7-request-list">
+              <SkeletonCard />
+              <SkeletonCard />
+              <SkeletonCard />
+            </div>
+          ) : error ? (
+            <ErrorState title="Could not load requests" message={error.message} onRetry={mode === 'nearby' ? loadNearby : loadAll} />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              title={mode === 'nearby' ? 'No nearby requests found' : 'No requests match your filters'}
+              message="Try widening your area, clearing filters, or raising a request if you need help."
+              actionLabel="Raise Request"
+              actionTo="/create"
+            />
+          ) : (
+            <div className="p7-request-list">
+              {filtered.map((request) => (
+                <RequestCard key={request.id} request={request} user={user} onAccept={handleAccept} accepting={accepting} />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+      <section className="p7-feed-bottom-grid">
+        <NearbyRequestMap requests={filtered} filters={filters} user={user} />
+        <RecentActivity notifications={notifications} requests={filtered} />
+      </section>
     </div>
   );
 }

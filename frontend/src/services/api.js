@@ -1,32 +1,21 @@
 import axios from 'axios';
-import { getStoredToken } from '../utils/sessionStorage';
+import { clearSessionStorage, getStoredToken } from '../utils/sessionStorage';
 import {
   calculateDistanceKm,
   getPrimaryVolunteerBadge,
   getVolunteerBadges,
   mapRequestCategoryToVolunteerCategory,
 } from '../utils/volunteer';
+import { API_BASE_URL, USE_MOCK_API } from './apiConfig';
 
-// Keep requests and community data mocked by default, but use the backend for auth.
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
-const USE_MOCK_AUTH = import.meta.env.VITE_USE_MOCK_AUTH === 'true';
-const USE_MOCK_USERS = import.meta.env.VITE_USE_MOCK_USERS === 'true';
+const USE_MOCK = USE_MOCK_API;
+const USE_MOCK_AUTH = USE_MOCK_API && import.meta.env.VITE_USE_MOCK_AUTH === 'true';
+const USE_MOCK_USERS = USE_MOCK_API && import.meta.env.VITE_USE_MOCK_USERS === 'true';
 
 export const AUTH_USES_MOCK = USE_MOCK_AUTH;
 
-function resolveApiBaseUrl() {
-  const runtimeUrl = typeof window !== 'undefined' ? window.__HVHN_CONFIG__?.API_URL : null;
-  const envUrl = import.meta.env.VITE_API_URL;
-
-  // In development we rely on Vite proxy if no explicit URL is set.
-  if (import.meta.env.DEV) return runtimeUrl || envUrl || '/api';
-
-  // In production there is no Vite proxy. Prefer runtime config, then build-time env.
-  return runtimeUrl || envUrl || '/api';
-}
-
 const api = axios.create({
-  baseURL: resolveApiBaseUrl(),
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' }
 });
 
@@ -55,6 +44,12 @@ function getFriendlyErrorMessage(error) {
   return error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Request failed.';
 }
 
+function isConfirmedSessionExpiry(error) {
+  const status = error?.response?.status;
+  const requestUrl = error?.config?.url || '';
+  return status === 401 && requestUrl === '/users/me' && Boolean(getStoredToken());
+}
+
 api.interceptors.request.use(config => {
   const token = getStoredToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -64,11 +59,10 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error?.response?.status === 401 || (error?.response?.status === 400 && error.config.url.startsWith('/communities'))) {
+    if (isConfirmedSessionExpiry(error)) {
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('hvhn_user');
-        window.localStorage.removeItem('hvhn_session_expiry');
-        window.sessionStorage.removeItem('hvhn_token');
+        clearSessionStorage();
+        window.dispatchEvent(new CustomEvent('hvhn:auth-expired'));
       }
     }
     const message = getFriendlyErrorMessage(error);
@@ -76,6 +70,28 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function getWithTransientRetry(url, config, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return config === undefined ? await api.get(url) : await api.get(url, config);
+    } catch (error) {
+      lastError = error;
+      if (error?.response?.status !== 503 || attempt === attempts - 1) {
+        throw error;
+      }
+      await wait(300 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
 
 // ====== MOCK DATA ======
 const mockCommunities = [
@@ -428,7 +444,7 @@ function applyMockVolunteerProfile(email, profile) {
 
 function initializeMockVolunteerProfiles() {
   applyMockVolunteerProfile('rahul@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['GENERAL', 'FOOD'] });
-  applyMockVolunteerProfile('priya@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['BLOOD', 'MEDICAL'] });
+  applyMockVolunteerProfile('priya@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['BLOOD_DONATION', 'MEDICAL'] });
   applyMockVolunteerProfile('amit@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['FOOD', 'GENERAL'] });
   applyMockVolunteerProfile('sneha@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['FOOD', 'GENERAL'] });
   applyMockVolunteerProfile('vikram@example.com', { isVolunteer: true, volunteerStatus: 'ONLINE', volunteerCategories: ['GENERAL', 'MEDICAL'] });
@@ -607,7 +623,7 @@ function formatNameFromEmail(email = '') {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 
-  return fullName || 'HVHN Member';
+  return fullName || 'Sahay Member';
 }
 
 function buildFirebaseSessionUser({ email, token, firebaseUid, fullName }) {
@@ -838,8 +854,7 @@ const mockApi = {
     sendOtp: async (email) => {
       const otp = String(Math.floor(100000 + Math.random() * 900000));
       otpStore[email] = { otp, expires: Date.now() + 300000 };
-      console.log(`📧 OTP for ${email}: ${otp}`);
-      return { data: { message: `OTP sent to ${email}`, otp } };
+      return { data: { message: `OTP sent to ${email}`, verified: false, retryAfterSeconds: 30, expiresInSeconds: 300 } };
     },
     verifyOtp: async (email, otp) => {
       const entry = otpStore[email];
@@ -1402,38 +1417,71 @@ const apiService = {
   loginWithEmailLink: (payload) => USE_MOCK_AUTH
     ? mockApi.auth.loginWithFirebase(payload)
     : api.post('/auth/firebase', payload),
-  register: (data) => USE_MOCK_AUTH ? mockApi.auth.register(data) : api.post('/auth/register', data),
-  sendOtp: (email) => USE_MOCK_AUTH ? mockApi.auth.sendOtp(email) : api.post('/auth/send-otp', { email }),
+  register: (data) => USE_MOCK_AUTH ? mockApi.auth.register(data) : api.post('/auth/register/verify', data),
+  requestRegistrationOtp: (email) => USE_MOCK_AUTH ? mockApi.auth.sendOtp(email) : api.post('/auth/register/request-otp', { email }),
+  verifyRegistration: (payload) => USE_MOCK_AUTH ? mockApi.auth.register(payload) : api.post('/auth/register/verify', payload),
+  sendOtp: (email) => USE_MOCK_AUTH ? mockApi.auth.sendOtp(email) : api.post('/auth/register/request-otp', { email }),
   verifyOtp: (email, otp) => USE_MOCK_AUTH ? mockApi.auth.verifyOtp(email, otp) : api.post('/auth/verify-otp', { email, otp }),
 
-  // Help Feed: use the default backend endpoint (/api/requests) which returns OPEN + ACTIVE.
+  // Help Feed: use the default backend endpoint (/api/requests) which returns open requests.
   getOpenRequests: () => USE_MOCK
     ? mockApi.requests.getOpen()
     : api.get('/requests').then(res => {
         const raw = res.data;
         return { ...res, data: Array.isArray(raw) ? raw : Array.isArray(raw?.content) ? raw.content : [] };
       }),
+  getNearbyRequests: (params) => USE_MOCK
+    ? mockApi.requests.getOpen()
+    : api.get('/requests/nearby', { params }).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   getAllRequests: () => USE_MOCK ? mockApi.requests.getAll() : api.get('/requests').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
-  getRequestById: (id) => USE_MOCK ? mockApi.requests.getById(id) : api.get(`/requests/${id}`),
-  getMyRequests: (userId) => USE_MOCK ? mockApi.requests.getMy(userId) : api.get('/requests/my').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
-  getVolunteeredRequests: (userId) => USE_MOCK ? mockApi.requests.getVolunteered(userId) : api.get('/requests/volunteered').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
+  getRequestById: (id) => USE_MOCK ? mockApi.requests.getById(id) : getWithTransientRetry(`/requests/${id}`),
+  getMyRequests: (userId) => USE_MOCK ? mockApi.requests.getMy(userId) : getWithTransientRetry('/requests/my').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
+  getVolunteeredRequests: (userId) => USE_MOCK ? mockApi.requests.getVolunteered(userId) : getWithTransientRetry('/requests/volunteered').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
   createRequest: (data, user) => USE_MOCK ? mockApi.requests.create(data, user) : api.post('/requests', data),
+  analyzeRequestMl: (data) => USE_MOCK
+    ? Promise.resolve({ data: { available: false } })
+    : api.post('/ml/request/analyze', data),
+  detectDuplicateRequest: (data) => USE_MOCK
+    ? Promise.resolve({ data: { available: false, duplicateLikely: false } })
+    : api.post('/ml/request/duplicate', data),
   
   // Verification endpoints
   verifyMedicalDocument: (data) => api.post('/verification/ocr', data),
   
   // AI Smart Search
+  smartSearchRequests: (query, candidates) => USE_MOCK
+    ? Promise.resolve({ data: { available: false, results: [] } })
+    : api.post('/ml/search/requests', { query, candidates }),
   smartSearch: (query) => api.get('/requests/smart-search', { params: { query } }),
   acceptRequest: (id, user) => USE_MOCK ? mockApi.requests.accept(id, user) : api.post(`/requests/${id}/accept`),
-  completeRequest: (id, user) => USE_MOCK ? mockApi.requests.complete(id, user) : api.post(`/requests/${id}/complete`),
+  requestCompletion: (id, user) => USE_MOCK ? mockApi.requests.complete(id, user) : api.post(`/requests/${id}/completion/request`),
+  completeRequest: (id, user) => USE_MOCK ? mockApi.requests.complete(id, user) : api.post(`/requests/${id}/completion/request`),
   cancelRequest: (id) => USE_MOCK ? mockApi.requests.cancel(id) : api.post(`/requests/${id}/cancel`),
-  verifyRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.verifyCompletion(id, user) : api.post(`/requests/${id}/verify-complete`),
-  rejectRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.rejectCompletion(id, user) : api.post(`/requests/${id}/reject-complete`),
-  getRequestTimeline: (id) => api.get(`/requests/${id}/timeline`),
+  updateRequestAvailability: (id, status) => api.post(`/requests/${id}/status`, { status }),
+  verifyRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.verifyCompletion(id, user) : api.post(`/requests/${id}/completion/confirm`),
+  rejectRequestCompletion: (id, user) => USE_MOCK ? mockApi.volunteer.rejectCompletion(id, user) : api.post(`/requests/${id}/completion/reject`),
+  withdrawRequest: (id) => USE_MOCK ? mockApi.requests.cancel(id) : api.post(`/requests/${id}/withdraw`),
+  deleteRequest: (id) => USE_MOCK ? mockApi.requests.cancel(id) : api.delete(`/requests/${id}`),
+  removeAcceptedRequest: (id) => USE_MOCK ? Promise.resolve({}) : api.delete(`/requests/${id}/accepted`),
+  getRequestTimeline: (id) => USE_MOCK ? Promise.resolve({ data: [] }) : getWithTransientRetry(`/requests/${id}/timeline`),
+  getRequestComments: (id) => USE_MOCK ? Promise.resolve({ data: [] }) : getWithTransientRetry(`/requests/${id}/comments`),
+  addRequestComment: (id, text) => USE_MOCK
+    ? Promise.resolve({ data: { id: `mock-comment-${Date.now()}`, text, authorName: 'You', createdAt: new Date().toISOString() } })
+    : api.post(`/requests/${id}/comments`, { text }),
+  deleteRequestComment: (requestId, commentId) => USE_MOCK ? Promise.resolve({ data: { deleted: true } }) : api.delete(`/requests/${requestId}/comments/${commentId}`),
   getPublicRequest: (id) => USE_MOCK ? mockApi.requests.getPublic(id) : api.get(`/requests/public/${id}`),
 
   getProfile: (userId) => USE_MOCK_USERS ? mockApi.users.getProfile(userId) : api.get('/users/me'),
-  updateProfile: (data) => api.put('/users/me', data),
+  updateProfile: (data) => api.put('/users/me/profile', data),
+  uploadAvatar: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/users/me/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  removeAvatar: () => api.delete('/users/me/avatar'),
+  reverseGeocode: (latitude, longitude) => api.get('/locations/reverse', { params: { lat: latitude, lon: longitude } }),
+  searchLocations: (query, type, config = {}) => api.get('/locations/search', { params: { q: query, type }, ...config }).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  completeOnboarding: (data) => api.put('/users/me/onboarding', data),
   updateSkills: (skills) => api.put('/users/skills', { skills }),
   updateEmergencyContacts: (contacts) => api.put('/users/emergency-contacts', { contacts }),
   getLeaderboard: () => USE_MOCK_USERS ? mockApi.users.getLeaderboard() : api.get('/users/leaderboard').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
@@ -1475,7 +1523,9 @@ const apiService = {
     : api.put(`/volunteer/decline/${requestId}`),
   updateVolunteerRequestStatus: (requestId, status, user) => USE_MOCK
     ? mockApi.volunteer.updateRequestStatus(requestId, status, user)
-    : api.put(`/volunteer/status/${requestId}`, { status }),
+    : (['REQUEST_COMPLETION', 'COMPLETION_REQUESTED', 'PENDING_COMPLETION', 'COMPLETED'].includes(String(status || '').toUpperCase())
+        ? api.post(`/requests/${requestId}/completion/request`)
+        : api.post(`/requests/${requestId}/progress`, { action: status })),
   rateVolunteer: (payload, userId) => USE_MOCK
     ? mockApi.volunteer.rate(payload, userId)
     : api.post('/volunteer/rate', payload),
@@ -1483,45 +1533,85 @@ const apiService = {
     ? mockApi.volunteer.getStats(userId)
     : api.get('/volunteer/stats'),
 
-  getCommunities: () => USE_MOCK ? mockApi.communities.getAll() : api.get('/communities').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
-  getCommunityDetail: (id) => USE_MOCK ? mockApi.communities.getDetail(id) : api.get(`/communities/${id}`),
+  listCommunities: (params = {}) => api.get('/communities', { params }).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : (res.data?.content || []) })),
+  getCommunities: (params = {}) => apiService.listCommunities(params),
+  getCommunityDetail: (id) => api.get(`/communities/${id}`),
+  getCommunityDashboard: (id) => api.get(`/communities/${id}/dashboard`),
   getJoinedCommunities: async (userId) => {
     if (USE_MOCK) return mockApi.communities.getJoined(userId);
     try {
       const res = await api.get('/communities');
       const data = Array.isArray(res.data) ? res.data : [];
-      const joinedIds = data.filter(c => c.memberIds && c.memberIds.includes(userId)).map(c => c.id);
+      const joinedIds = data
+        .filter(c => c.membershipStatus === 'ACTIVE' || c.currentUserRole)
+        .map(c => c.id);
       return { data: joinedIds };
     } catch (err) {
       return { data: [] };
     }
   },
-  joinCommunity: (communityId, verificationCode, userId) => USE_MOCK ? mockApi.communities.join(communityId, verificationCode, userId) : api.post(`/communities/${communityId}/join`, { code: verificationCode }),
-  leaveCommunity: (communityId, userId) => USE_MOCK ? mockApi.communities.leave(communityId, userId) : api.post(`/communities/${communityId}/leave`),
-  createCommunity: (data, userId) => USE_MOCK ? mockApi.communities.create(data, userId) : api.post('/communities', {
-    ...data,
-    category: data.type,
-    location: data.address,
-    description: data.description || 'Community details',
-  }),
+  joinCommunity: (communityId, verificationCode) => api.post(`/communities/${communityId}/join`, { code: verificationCode }),
+  leaveCommunity: (communityId) => api.post(`/communities/${communityId}/leave`),
+  createCommunity: (data) => {
+    const joinPolicy = data.joinPolicy || (data.verificationCode ? 'JOIN_CODE' : data.emailDomain ? 'EMAIL_DOMAIN' : 'OPEN');
+    const payload = {
+      name: data.name,
+      description: data.description || 'Community details',
+      category: data.category || data.type,
+      visibility: data.visibility || 'PUBLIC',
+      joinPolicy,
+      address: data.address || data.location,
+      city: data.city,
+      district: data.district,
+      state: data.state,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      rules: data.rules,
+      tags: data.tags,
+      coverImageUrl: data.coverImageUrl,
+      logoUrl: data.logoUrl,
+    };
+    if (joinPolicy === 'JOIN_CODE') payload.joinCode = data.joinCode || data.verificationCode;
+    if (joinPolicy === 'EMAIL_DOMAIN') payload.institutionDomain = data.institutionDomain || data.emailDomain;
+    return api.post('/communities', payload);
+  },
 
   // Email Domain Verification (Feature 2)
   sendEmailOTP: (communityId, email) => USE_MOCK ? mockApi.emailOtp.send(communityId, email) : api.post(`/communities/${communityId}/email-otp/send`, { email }),
   verifyEmailOTP: (communityId, email, otp, userId) => USE_MOCK ? mockApi.emailOtp.verify(communityId, email, otp, userId) : api.post(`/communities/${communityId}/email-otp/verify`, { email, otp }),
 
   // Community Management (Feature 4)
-  updateCommunity: (communityId, data) => USE_MOCK ? mockApi.communityManage.update(communityId, data) : api.put(`/communities/${communityId}`, {
+  updateCommunity: (communityId, data) => api.put(`/communities/${communityId}`, {
     ...data,
-    category: data.type,
-    location: data.address,
+    category: data.category || data.type,
+    address: data.address || data.location,
     description: data.description || 'Community details',
+    joinPolicy: data.joinPolicy || (data.verificationCode ? 'JOIN_CODE' : data.emailDomain ? 'EMAIL_DOMAIN' : 'OPEN'),
+    joinCode: data.joinCode || data.verificationCode,
+    institutionDomain: data.institutionDomain || data.emailDomain,
   }),
-  deleteCommunity: (communityId) => USE_MOCK ? mockApi.communityManage.delete(communityId) : api.delete(`/communities/${communityId}`),
-  removeCommunityMember: (communityId, memberId) => USE_MOCK ? mockApi.communityManage.removeMember(communityId, memberId) : api.delete(`/communities/${communityId}/members/${memberId}`),
-  broadcastMessage: (communityId, content) => api.post(`/communities/${communityId}/broadcast`, { content }),
-  getCommunityMembers: (communityId) => USE_MOCK ? mockApi.communityManage.getMembers(communityId) : api.get(`/communities/${communityId}/members`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  deleteCommunity: (communityId) => api.delete(`/communities/${communityId}`),
+  removeCommunityMember: (communityId, memberId) => api.delete(`/communities/${communityId}/members/${memberId}`),
+  updateCommunityMemberRole: (communityId, memberId, role) => api.put(`/communities/${communityId}/members/${memberId}/role`, { role }),
+  createAnnouncement: (communityId, data) => api.post(`/communities/${communityId}/announcements`, data),
+  broadcastMessage: (communityId, content) => api.post(`/communities/${communityId}/broadcast`, typeof content === 'object' ? content : { content }),
+  broadcastCommunityMessage: (communityId, data) => apiService.broadcastMessage(communityId, data),
+  getCommunityMembers: (communityId) => api.get(`/communities/${communityId}/members`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
   getCommunityRequests: (communityId) => api.get(`/communities/${communityId}/requests`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
-  createCommunityRequest: (communityId, data) => api.post(`/communities/${communityId}/requests`, data),
+  createCommunityRequest: (communityId, data) => {
+    const { communityId: _ignoredCommunityId, scope: _ignoredScope, ...payload } = data || {};
+    return api.post(`/communities/${communityId}/requests`, payload);
+  },
+  listQuestions: (communityId) => api.get(`/communities/${communityId}/questions`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  createQuestion: (communityId, data) => api.post(`/communities/${communityId}/questions`, data),
+  createAnswer: (communityId, questionId, data) => api.post(`/communities/${communityId}/questions/${questionId}/answers`, data),
+  upvoteQuestion: (communityId, questionId) => api.post(`/communities/${communityId}/questions/${questionId}/upvote`),
+  upvoteAnswer: (communityId, questionId, answerId) => api.post(`/communities/${communityId}/questions/${questionId}/answers/${answerId}/upvote`),
+  acceptAnswer: (communityId, questionId, answerId) => api.post(`/communities/${communityId}/questions/${questionId}/answers/${answerId}/accept`),
+  listCampaigns: (communityId) => api.get(`/communities/${communityId}/campaigns`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  createCampaign: (communityId, data) => api.post(`/communities/${communityId}/campaigns`, data),
+  contributeToCampaign: (communityId, campaignId, data) => api.post(`/communities/${communityId}/campaigns/${campaignId}/contributions`, data),
+  messageCommunityMember: (communityId, memberId) => api.post(`/communities/${communityId}/members/${memberId}/message`),
 
   getDashboardStats: () => USE_MOCK ? mockApi.admin.getDashboard() : api.get('/admin/dashboard'),
   getAdminRequests: () => USE_MOCK ? mockApi.admin.getRequests() : api.get('/admin/requests').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
@@ -1533,11 +1623,19 @@ const apiService = {
     ? mockApi.admin.reviewRequest(requestId, status) 
     : api.put(`/admin/requests/${requestId}/review`, { status }),
 
-  getChatRooms: () => api.get('/chat/rooms').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
-  getChatHistory: (roomId, page = 0, size = 50) => api.get(`/chat/${roomId}/history`, { params: { page, size } }).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getChatRooms: () => api.get('/chat/conversations').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  getChatConversations: () => apiService.getChatRooms(),
+  getChatHistory: (roomId, page = 0, size = 50) => api.get(`/chat/conversations/${roomId}/messages`, { params: { page, size } }).then(res => ({
+    ...res,
+    data: Array.isArray(res.data)
+      ? { messages: res.data, page, size, hasMore: false }
+      : { ...res.data, messages: Array.isArray(res.data?.messages) ? res.data.messages : [] },
+  })),
+  getChatMessages: (roomId, page = 0, size = 50) => apiService.getChatHistory(roomId, page, size),
   createDirectChatRoom: (payload) => api.post('/chat/rooms/direct', payload),
   createGroupChatRoom: (payload) => api.post('/chat/rooms/group', payload),
   markChatMessageRead: (messageId) => api.put(`/chat/${messageId}/read`),
+  markConversationSeen: (roomId, lastSeenMessageId) => api.post(`/chat/conversations/${roomId}/seen`, null, { params: { lastSeenMessageId } }),
   uploadChatAttachment: (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -1546,18 +1644,37 @@ const apiService = {
     });
   },
   deleteChatMessage: (messageId) => api.delete(`/chat/messages/${messageId}`),
-  deleteChatRoom: (roomId) => api.delete(`/chat/rooms/${roomId}`),
+  deleteChatRoom: (roomId) => api.delete(`/chat/conversations/${roomId}`),
+  hideChatConversation: (roomId) => apiService.deleteChatRoom(roomId),
   toggleChatReaction: (messageId, emoji) => api.post(`/chat/messages/${messageId}/react`, null, { params: { emoji } }),
   getOnlineUsers: () => api.get('/presence/online-users'),
 
+  getNotifications: (params = {}) => api.get('/notifications', { params }).then(res => ({
+    ...res,
+    data: {
+      ...res.data,
+      notifications: Array.isArray(res.data?.notifications) ? res.data.notifications : [],
+    },
+  })),
+  getNotificationUnreadCount: () => api.get('/notifications/unread-count'),
+  markNotificationRead: (notificationId) => api.post(`/notifications/${notificationId}/read`),
+  markNotificationUnread: (notificationId) => api.post(`/notifications/${notificationId}/unread`),
+  markAllNotificationsRead: (params = {}) => api.post('/notifications/read-all', null, { params }),
+  deleteNotification: (notificationId) => api.delete(`/notifications/${notificationId}`),
+  getNotificationPreferences: () => api.get('/notifications/preferences'),
+  updateNotificationPreferences: (payload) => api.put('/notifications/preferences', payload),
+  registerNotificationDevice: (payload) => api.post('/notifications/devices', payload),
+  listNotificationDevices: () => api.get('/notifications/devices').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  deleteNotificationDevice: (deviceId) => api.delete(`/notifications/devices/${deviceId}`),
+  sendAssistantMessage: (payload) => api.post('/assistant/chat', payload),
+
   // Announcements
-  getAnnouncements: (communityId) => USE_MOCK ? mockApi.announcements.getByCommunity(communityId) : api.get(`/community/${communityId}/announcements`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
-  createAnnouncement: (communityId, data) => USE_MOCK ? mockApi.announcements.create(communityId, data) : api.post(`/community/${communityId}/announcements`, data),
-  deleteAnnouncement: (communityId, announcementId) => USE_MOCK ? mockApi.announcements.delete(communityId, announcementId) : api.delete(`/community/${communityId}/announcements/${announcementId}`),
-  togglePinAnnouncement: (communityId, announcementId) => USE_MOCK ? mockApi.announcements.togglePin(communityId, announcementId) : api.put(`/community/${communityId}/announcements/${announcementId}/pin`),
+  getAnnouncements: (communityId) => api.get(`/communities/${communityId}/announcements`).then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
+  deleteAnnouncement: (communityId, announcementId) => api.delete(`/communities/${communityId}/announcements/${announcementId}`),
+  togglePinAnnouncement: (communityId, announcementId) => api.put(`/communities/${communityId}/announcements/${announcementId}/pin`),
   getPinnedAnnouncements: () => USE_MOCK ? mockApi.announcements.getPinned() : api.get('/community/announcements/pinned').then(res => ({ ...res, data: Array.isArray(res.data) ? res.data : [] })),
 
-  // HVHN-AI Engine
+  // Sahay AI Engine
   processAiRequest: (payload) => api.post('/ai/process', payload),
   ai: {
     parseRequest: (rawText) => api.post('/ai/process', {

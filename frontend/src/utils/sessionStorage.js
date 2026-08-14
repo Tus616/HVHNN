@@ -5,6 +5,7 @@ const SESSION_KEYS = [
   'role',
   'communityId',
   'hvhn_session_expiry',
+  'hvhn_profile_setup_complete',
 ];
 
 export function clearSessionStorage() {
@@ -17,8 +18,8 @@ export function getStoredToken() {
   if (typeof window === 'undefined') return '';
 
   return (
-    window.localStorage.getItem('token')
-    || window.localStorage.getItem('hvhn_token')
+    window.localStorage.getItem('hvhn_token')
+    || window.localStorage.getItem('token')
     || ''
   );
 }

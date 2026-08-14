@@ -9,10 +9,10 @@ export default function Footer() {
         <div className="footer-brand">
           <Link to="/" className="footer-logo">
             <span className="logo-icon">⚡</span>
-            <span>HVHN</span>
+            <span>Sahay</span>
           </Link>
           <p className="footer-tagline">
-            Hyperlocal Verified Help Network — connecting communities for faster, trusted help.
+            Help Where It Matters — connecting communities for faster, trusted help.
           </p>
         </div>
 
@@ -39,7 +39,7 @@ export default function Footer() {
       </div>
 
       <div className="footer-bottom">
-        <span>© {year} HVHN. Built with ❤️ for communities.</span>
+        <span>(c) {year} Sahay. Built with ❤️ for communities.</span>
         <div className="footer-bottom-links">
           <span>Privacy</span>
           <span>Terms</span>

@@ -6,6 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "lint": "node --test src/services/apiConfig.test.mjs",
+    "test": "vitest run src/App.auth-routes.test.jsx src/services/requestLifecycleApi.test.js && node --test src/services/apiConfig.test.mjs",
+    "test:ui": "vitest run src/components/ui.phase7.test.jsx src/pages/Landing.test.jsx src/App.auth-routes.test.jsx",
+    "test:requests": "vitest run src/pages/__tests__/Phase7ARequests.test.jsx src/services/requestLifecycleApi.test.js",
+    "test:a11y": "vitest run src/components/ui.phase7.test.jsx",
+    "test:e2e": "vitest run src/App.auth-routes.test.jsx src/context/NotificationContext.phase6.test.jsx",
+    "test:auth": "vitest run src/App.auth-routes.test.jsx",
+    "test:chat": "vitest run src/hooks/useChatSocket.phase5.test.jsx",
+    "test:notifications": "vitest run src/context/NotificationContext.phase6.test.jsx",
+    "test:phase7c": "vitest run src/pages/__tests__/Phase7CMessagingNotifications.test.jsx src/hooks/useChatSocket.phase5.test.jsx src/context/NotificationContext.phase6.test.jsx",
+    "test:phase7d": "vitest run src/pages/__tests__/Phase7DProfileSettingsAdmin.test.jsx",
+    "test:phase7a:e2e": "set VITE_API_URL=http://localhost:18080/api&& playwright test --config=playwright.phase7a.config.js tests/phase7a.e2e.spec.js",
+    "test:phase7a:visual": "set VITE_API_URL=http://localhost:18080/api&& playwright test --config=playwright.phase7a.config.js tests/phase7a.visual.spec.js",
+    "test:phase7a:browser": "set VITE_API_URL=http://localhost:18080/api&& node scripts/phase7a-browser-verify.mjs",
+    "test:community": "vitest run src/pages/__tests__/CommunityPhase4Verification.test.jsx src/services/requestLifecycleApi.test.js",
+    "test:communities": "vitest run src/pages/__tests__/CommunityPhase4Verification.test.jsx src/services/requestLifecycleApi.test.js",
+    "test:phase7b:e2e": "set VITE_API_URL=http://localhost:18080/api&& playwright test --config=playwright.phase7b.config.js tests/phase7b.e2e.spec.js",
+    "test:phase7b:visual": "set VITE_API_URL=http://localhost:18080/api&& playwright test --config=playwright.phase7b.config.js tests/phase7b.visual.spec.js",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,9 +41,16 @@
     "sockjs-client": "^1.6.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^6.4.6",
+    "@testing-library/react": "^15.0.7",
+    "@testing-library/user-event": "^14.5.2",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
-    "vite": "^5.2.12"
+    "axe-core": "^4.13.0",
+    "jsdom": "^24.1.0",
+    "vite": "^5.2.12",
+    "vitest": "^1.6.0"
   }
 }

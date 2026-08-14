@@ -1,27 +1,51 @@
 export const VOLUNTEER_CATEGORY_OPTIONS = [
-  { value: 'BLOOD', label: 'Blood', icon: '🩸' },
-  { value: 'MEDICAL', label: 'Medical', icon: '🏥' },
-  { value: 'FOOD', label: 'Food', icon: '🍲' },
-  { value: 'GENERAL', label: 'General', icon: '🤝' },
+  { value: 'BLOOD_DONATION', label: 'Blood Donation', icon: 'BD' },
+  { value: 'MEDICAL', label: 'Medical', icon: 'MD' },
+  { value: 'FOOD', label: 'Food', icon: 'FD' },
+  { value: 'TRANSPORT', label: 'Transport', icon: 'TR' },
+  { value: 'EMERGENCY', label: 'Emergency', icon: 'ER' },
+  { value: 'GENERAL', label: 'General', icon: 'GN' },
 ];
 
 export const VOLUNTEER_SKILL_OPTIONS = [
-  { value: 'DOCTOR', label: 'Doctor', icon: '🩺' },
-  { value: 'NURSE', label: 'Nurse', icon: '🏥' },
-  { value: 'DRIVER', label: 'Driver', icon: '🚑' },
-  { value: 'PHARMACIST', label: 'Pharmacist', icon: '💊' },
-  { value: 'COOK', label: 'Cook', icon: '🥣' },
-  { value: 'COUNSELOR', label: 'Counselor', icon: '🧠' },
-  { value: 'FIRST_AID', label: 'First Aid', icon: '🩹' },
-  { value: 'GENERAL', label: 'General Volunteer', icon: '🤝' },
+  { value: 'DOCTOR', label: 'Doctor', icon: 'DR' },
+  { value: 'NURSE', label: 'Nurse', icon: 'NR' },
+  { value: 'DRIVER', label: 'Driver', icon: 'DV' },
+  { value: 'PHARMACIST', label: 'Pharmacist', icon: 'RX' },
+  { value: 'COOK', label: 'Cook', icon: 'CK' },
+  { value: 'COUNSELOR', label: 'Counselor', icon: 'CS' },
+  { value: 'FIRST_AID', label: 'First Aid', icon: 'FA' },
+  { value: 'GENERAL', label: 'General Volunteer', icon: 'GN' },
 ];
 
 export const VOLUNTEER_BADGE_DEFS = [
-  { key: 'helper', label: 'Helper', icon: '🌱', threshold: 1 },
-  { key: 'rising-star', label: 'Rising Star', icon: '⭐', threshold: 5 },
-  { key: 'active-volunteer', label: 'Active Volunteer', icon: '🔥', threshold: 20 },
-  { key: 'community-hero', label: 'Community Hero', icon: '💎', threshold: 50 },
+  { key: 'helper', label: 'Helper', icon: 'H1', threshold: 1 },
+  { key: 'rising-star', label: 'Rising Star', icon: 'H5', threshold: 5 },
+  { key: 'active-volunteer', label: 'Active Volunteer', icon: 'H20', threshold: 20 },
+  { key: 'community-hero', label: 'Community Hero', icon: 'H50', threshold: 50 },
 ];
+
+const LEGACY_VOLUNTEER_CATEGORY_MAP = {
+  BLOOD: 'BLOOD_DONATION',
+  MEDICAL_EMERGENCY: 'MEDICAL',
+  FOOD_SUPPORT: 'FOOD',
+  DRIVER: 'TRANSPORT',
+  SOS: 'EMERGENCY',
+  CRITICAL: 'EMERGENCY',
+  OTHER: 'GENERAL',
+};
+
+export function normalizeVolunteerCategory(category = '') {
+  const normalized = String(category || '').trim().toUpperCase().replace(/[-\s]+/g, '_');
+  return LEGACY_VOLUNTEER_CATEGORY_MAP[normalized] || normalized;
+}
+
+export function normalizeVolunteerCategories(categories = []) {
+  const allowed = new Set(VOLUNTEER_CATEGORY_OPTIONS.map((category) => category.value));
+  return [...new Set((Array.isArray(categories) ? categories : [])
+    .map(normalizeVolunteerCategory)
+    .filter((category) => allowed.has(category)))];
+}
 
 export function getVolunteerBadges(totalHelpCount = 0) {
   return VOLUNTEER_BADGE_DEFS.filter((badge) => totalHelpCount >= badge.threshold);
@@ -34,9 +58,11 @@ export function getPrimaryVolunteerBadge(totalHelpCount = 0) {
 
 export function mapRequestCategoryToVolunteerCategory(category = '') {
   const normalized = String(category || '').trim().toUpperCase();
-  if (normalized.includes('BLOOD')) return 'BLOOD';
+  if (normalized.includes('BLOOD')) return 'BLOOD_DONATION';
   if (normalized.includes('MEDICAL')) return 'MEDICAL';
   if (normalized.includes('FOOD')) return 'FOOD';
+  if (normalized.includes('TRANSPORT')) return 'TRANSPORT';
+  if (normalized.includes('EMERGENCY') || normalized.includes('CRITICAL')) return 'EMERGENCY';
   return 'GENERAL';
 }
 

@@ -3,6 +3,7 @@ import { MessageSquarePlus, Users } from 'lucide-react';
 import apiService from '../../services/api';
 import useChatSocket from '../../hooks/useChatSocket';
 import { getMemberQuickReplies, matchesCurrentUser } from '../../utils/communityHub';
+import { getStoredToken } from '../../utils/sessionStorage';
 import ChatWindow from './ChatWindow';
 import OnlineStatus from './OnlineStatus';
 import UnreadBadge from './UnreadBadge';
@@ -61,7 +62,7 @@ export default function CommunityChatPanel({
   const [selectedGroupEmails, setSelectedGroupEmails] = useState([]);
   const [savingRoom, setSavingRoom] = useState(false);
 
-  const token = user?.token || window.localStorage.getItem('hvhn_token') || '';
+  const token = user?.token || getStoredToken() || '';
   const {
     messages: liveMessages,
     sendMessage,
@@ -197,21 +198,6 @@ export default function CommunityChatPanel({
       showToast?.('The chat socket is disconnected right now. Please wait for reconnection.', 'error');
     }
     return didSend;
-  }
-
-  async function handleUploadAttachment(file) {
-    try {
-      const response = await apiService.uploadChatAttachment(file);
-      const { url, fileName, contentType } = response.data;
-      const attachmentMessage = `attachment:${url}|${fileName}|${contentType || ''}`;
-      const didSend = sendMessage(attachmentMessage);
-
-      if (!didSend) {
-        showToast?.('Upload worked, but the socket is disconnected. Reconnect and try sending again.', 'error');
-      }
-    } catch (error) {
-      showToast?.(error.message || 'We could not upload that file.', 'error');
-    }
   }
 
   async function handleMessagesRead(messageId) {
@@ -357,7 +343,6 @@ export default function CommunityChatPanel({
             connectionStatus={connectionStatus}
             onSendMessage={handleSendMessage}
             onTypingChange={sendTyping}
-            onUploadAttachment={handleUploadAttachment}
             onMessagesRead={handleMessagesRead}
             onDeleteMessage={apiService.deleteChatMessage}
             prefillText={composerPrefill}

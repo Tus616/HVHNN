@@ -5,16 +5,16 @@ import AdminEmptyState from '../../components/admin/AdminEmptyState';
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import StatsCard from '../../components/admin/StatsCard';
 import { adminApi } from '../../services/adminApi';
-
-function formatTime(value) {
-  return value ? new Date(value).toLocaleString() : '-';
-}
+import { ErrorState } from '../../components/ui';
+import { formatDateTime } from '../../utils/displayFormat';
+import { normalizeApiError } from '../../utils/errors';
 
 export default function AdminOverviewPage() {
   const { user, showToast } = useOutletContext();
   const [stats, setStats] = useState(null);
   const [recentRequests, setRecentRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -23,6 +23,7 @@ export default function AdminOverviewPage() {
       setLoading(true);
 
       try {
+        setError('');
         const [statsResponse, recentResponse] = await Promise.all([
           adminApi.getOverview(user),
           adminApi.getRecentRequests(user),
@@ -36,13 +37,13 @@ export default function AdminOverviewPage() {
         if (statsResponse.fallback || recentResponse.fallback) {
           showToast({
             type: 'info',
-            title: 'Using safe fallback data',
-            message: 'Some admin endpoints are not ready yet, so the dashboard is showing resilient mock data.',
+            title: 'Using derived dashboard data',
+            message: 'Showing the admin data currently available. Some live totals are unavailable right now.',
           });
         }
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin overview.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -57,6 +58,10 @@ export default function AdminOverviewPage() {
 
   if (loading) {
     return <AdminLoadingState label="Loading overview..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
   }
 
   return (
@@ -74,11 +79,11 @@ export default function AdminOverviewPage() {
       </section>
 
       <section className="admin-stats-grid">
-        <StatsCard title="Requests Today" value={stats?.totalRequestsToday ?? 0} tone="blue" trendValue="↑ 12%" trendDirection="up" />
-        <StatsCard title="Active Volunteers" value={stats?.activeVolunteers ?? 0} tone="green" trendValue="↑ 5%" trendDirection="up" />
-        <StatsCard title="Pending Requests" value={stats?.pendingRequests ?? 0} tone="yellow" trendValue="↓ 2%" trendDirection="down" />
-        <StatsCard title="Resolved Requests" value={stats?.resolvedRequests ?? 0} tone="green" trendValue="↑ 8%" trendDirection="up" />
-        <StatsCard title="Total Members" value={stats?.totalMembers ?? 0} tone="blue" trendValue="↑ 1%" trendDirection="up" />
+        <StatsCard title="Requests Today" value={stats?.totalRequestsToday ?? 0} tone="blue" />
+        <StatsCard title="Active Volunteers" value={stats?.activeVolunteers ?? 0} tone="green" />
+        <StatsCard title="Pending Requests" value={stats?.pendingRequests ?? 0} tone="yellow" />
+        <StatsCard title="Resolved Requests" value={stats?.resolvedRequests ?? 0} tone="green" />
+        <StatsCard title="Total Members" value={stats?.totalMembers ?? 0} tone="blue" />
       </section>
 
 
@@ -112,7 +117,7 @@ export default function AdminOverviewPage() {
                 {recentRequests.map((request) => (
                   <tr key={request.id}>
                     <td>{request.id}</td>
-                    <td>{request.category}</td>
+                    <td><AdminStatusBadge value={request.category} /></td>
                     <td>
                       <AdminStatusBadge
                         value={request.urgency}
@@ -121,7 +126,7 @@ export default function AdminOverviewPage() {
                     </td>
                     <td><AdminStatusBadge value={request.status} /></td>
                     <td>{request.raisedBy}</td>
-                    <td>{formatTime(request.createdAt)}</td>
+                    <td>{formatDateTime(request.createdAt)}</td>
                   </tr>
                 ))}
               </tbody>

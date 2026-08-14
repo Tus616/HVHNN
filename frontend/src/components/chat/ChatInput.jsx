@@ -1,71 +1,59 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paperclip, SendHorizonal, Smile } from 'lucide-react';
-import EmojiPicker from 'emoji-picker-react';
+import { SendHorizonal, Smile, X } from 'lucide-react';
+import { IconButton } from '../ui';
+
+const QUICK_REACTIONS = ['👍', '❤️', '🙂', '🙏'];
 
 export default function ChatInput({
   disabled,
   onSend,
   onTypingChange,
-  onUpload,
   prefillText = '',
 }) {
   const [draft, setDraft] = useState('');
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState('');
-  
-  const fileInputRef = useRef(null);
+  const [showEmojiTray, setShowEmojiTray] = useState(false);
+  const textareaRef = useRef(null);
   const idleTimerRef = useRef(null);
+  const sendingRef = useRef(false);
+
+  useEffect(() => () => {
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+  }, []);
 
   useEffect(() => {
-    return () => {
-      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  useEffect(() => {
-    if (prefillText) {
-      setDraft(prefillText);
-      resetTypingTimer(prefillText);
-    }
+    if (!prefillText) return;
+    setDraft(prefillText);
+    resetTypingTimer(prefillText);
+    textareaRef.current?.focus();
   }, [prefillText]);
 
   function resetTypingTimer(nextDraft) {
-    onTypingChange(Boolean(nextDraft.trim()));
+    onTypingChange?.(Boolean(nextDraft.trim()));
     if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
-    idleTimerRef.current = window.setTimeout(() => onTypingChange(false), 2000);
+    idleTimerRef.current = window.setTimeout(() => onTypingChange?.(false), 2200);
   }
 
-  function handleChange(event) {
-    const nextDraft = event.target.value;
+  function updateDraft(nextDraft) {
     setDraft(nextDraft);
     resetTypingTimer(nextDraft);
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
   }
 
   async function handleSend() {
-    if (disabled || uploading) return;
-
-    if (pendingFile) {
-      setUploading(true);
-      try {
-        await onUpload(pendingFile);
-        setPendingFile(null);
-        setPreviewUrl('');
-      } finally {
-        setUploading(false);
-      }
-    }
-
-    const nextDraft = draft.trim();
-    if (nextDraft) {
-      const didSend = onSend(nextDraft);
-      if (didSend) {
-        setDraft('');
-        setShowEmojiPicker(false);
-        onTypingChange(false);
-      }
+    const content = draft.trim();
+    if (disabled || !content || sendingRef.current) return;
+    sendingRef.current = true;
+    const didSend = await onSend(content);
+    sendingRef.current = false;
+    if (didSend) {
+      setDraft('');
+      setShowEmojiTray(false);
+      onTypingChange?.(false);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      textareaRef.current?.focus();
     }
   }
 
@@ -76,80 +64,56 @@ export default function ChatInput({
     }
   }
 
-  function handleFileSelect(event) {
-    const [file] = event.target.files || [];
-    event.target.value = '';
-    if (!file || disabled) return;
-
-    setPendingFile(file);
-    if (file.type.startsWith('image/')) {
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-    }
-  }
+  const canSend = Boolean(draft.trim()) && !disabled;
 
   return (
-    <div className="chat-input-shell" style={{ position: 'relative' }}>
-      {showEmojiPicker && (
-        <div className="chat-emoji-picker" style={{ position: 'absolute', bottom: '100%', left: 0, zIndex: 100, width: '320px', marginBottom: '12px' }}>
-          <EmojiPicker
-            width="100%"
-            height={400}
-            onEmojiClick={(emoji) => {
-              const nextDraft = `${draft}${emoji.emoji}`;
-              setDraft(nextDraft);
-              resetTypingTimer(nextDraft);
-            }}
-          />
+    <div className="p7c-composer" aria-label="Message composer">
+      {showEmojiTray && (
+        <div className="p7c-emoji-tray" role="menu" aria-label="Quick emoji reactions">
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              aria-label={`Insert ${emoji}`}
+              onClick={() => updateDraft(`${draft}${emoji}`)}
+            >
+              {emoji}
+            </button>
+          ))}
         </div>
       )}
 
-      {pendingFile && (
-        <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '12px', animation: 'message-in 0.2s ease-out' }}>
-          {previewUrl ? (
-            <img src={previewUrl} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px' }} alt="Preview" />
-          ) : (
-            <div style={{ width: '60px', height: '60px', background: 'var(--bg-card)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>📄</div>
-          )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pendingFile.name}</div>
-            <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{(pendingFile.size / 1024).toFixed(1)} KB</div>
-          </div>
-          <button className="btn btn-icon" onClick={() => { setPendingFile(null); setPreviewUrl(''); }}>✕</button>
-        </div>
-      )}
+      <div className={`p7c-composer-box ${disabled ? 'is-disabled' : ''}`}>
+        <IconButton
+          label={showEmojiTray ? 'Close emoji choices' : 'Open emoji choices'}
+          className="p7c-composer-icon"
+          onClick={() => setShowEmojiTray((current) => !current)}
+          disabled={disabled}
+        >
+          {showEmojiTray ? <X size={18} /> : <Smile size={18} />}
+        </IconButton>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '12px', maxWidth: '1000px', margin: '0 auto' }}>
-        <div style={{ flex: 1, background: 'var(--bg-card)', borderRadius: '24px', border: '1px solid var(--border)', display: 'flex', alignItems: 'flex-end', padding: '8px 16px', gap: '12px' }}>
-          <button className="btn btn-icon" onClick={() => fileInputRef.current?.click()} disabled={disabled || uploading} style={{ padding: '8px', margin: 0 }}>
-            <Paperclip size={20} opacity={0.5} />
-          </button>
-          
-          <input ref={fileInputRef} type="file" hidden onChange={handleFileSelect} />
-
-          <textarea
-            className="form-textarea"
-            rows={1}
-            placeholder={disabled ? 'Reconnect...' : 'Message...'}
-            value={draft}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            disabled={disabled || uploading}
-            style={{ flex: 1, border: 'none', background: 'transparent', padding: '8px 0', fontSize: '0.95rem', minHeight: '40px', maxHeight: '120px', resize: 'none' }}
-          />
-
-          <button className="btn btn-icon" onClick={() => setShowEmojiPicker(!showEmojiPicker)} disabled={disabled} style={{ padding: '8px', margin: 0 }}>
-            <Smile size={20} opacity={0.5} />
-          </button>
-        </div>
+        <label className="sr-only" htmlFor="chat-message-composer">Message</label>
+        <textarea
+          id="chat-message-composer"
+          ref={textareaRef}
+          rows={1}
+          placeholder={disabled ? 'Reconnect to send messages' : 'Write a message'}
+          value={draft}
+          onChange={(event) => updateDraft(event.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+        />
 
         <button
-          className="btn btn-primary"
+          type="button"
+          className="p7c-send-button"
           onClick={handleSend}
-          disabled={disabled || uploading || (!draft.trim() && !pendingFile)}
-          style={{ width: '48px', height: '48px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          disabled={!canSend}
+          aria-label="Send message"
         >
-          <SendHorizonal size={22} />
+          <SendHorizonal size={18} aria-hidden="true" />
+          <span>Send</span>
         </button>
       </div>
     </div>

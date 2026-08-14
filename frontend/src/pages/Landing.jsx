@@ -1,191 +1,380 @@
-// FEATURE: Public Landing Page - IMPLEMENTED
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  ArrowRight,
+  BellRing,
+  CheckCircle2,
+  ChevronRight,
+  HeartHandshake,
+  HelpCircle,
+  LockKeyhole,
+  MapPin,
+  Menu,
+  MessageSquare,
+  Moon,
+  Network,
+  Radio,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  Target,
+  Users,
+  X,
+  Zap,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
+import BrandLogo from '../components/BrandLogo';
 
-const STATS = [
-  { value: '10,000+', label: 'Requests Fulfilled' },
-  { value: '5,000+', label: 'Verified Volunteers' },
-  { value: '250+', label: 'Communities' },
-  { value: '< 15 min', label: 'Avg Response Time' },
+const HERO_IMAGE = '/assets/sahay-landing-hero.png';
+
+const NAV_ITEMS = [
+  { label: 'Home', href: '#hero' },
+  { label: 'Features', href: '#features' },
+  { label: 'How It Works', href: '#how-it-works' },
+  { label: 'Communities', href: '#communities' },
+  { label: 'Safety', href: '#safety' },
+  { label: 'About Us', href: '#about' },
 ];
 
-const CATEGORIES = [
-  { icon: '🩸', name: 'Blood Donation', desc: 'Emergency blood requirements matched with nearby verified donors' },
-  { icon: '🏥', name: 'Medical Aid', desc: 'Medicine delivery, hospital transport, and medical equipment sharing' },
-  { icon: '🍲', name: 'Food Support', desc: 'Meal delivery for elderly, patients, and those in need' },
-  { icon: '🚗', name: 'Transport', desc: 'Emergency rides to hospitals, airports, and essential services' },
-  { icon: '🚨', name: 'Emergency', desc: 'Critical SOS alerts broadcast to all nearby volunteers instantly' },
-  { icon: '📋', name: 'General Help', desc: 'Everyday assistance — groceries, documents, errands, and more' },
+const HERO_STATS = [
+  { label: 'Active Help Network', value: 'Live', accent: 'orange' },
+  { label: 'Verified Community', value: 'Trusted', accent: 'blue' },
+  { label: 'Local Coordination', value: 'Nearby', accent: 'blue' },
+  { label: 'Always Accessible', value: '24/7', accent: 'orange' },
 ];
 
-const HOW_IT_WORKS = [
-  { step: '01', title: 'Raise a Request', desc: 'Describe what you need, set urgency, and our AI auto-classifies it.', icon: '📝' },
-  { step: '02', title: 'AI Matches Volunteers', desc: 'Smart routing notifies the closest verified volunteers in tiers.', icon: '🤖' },
-  { step: '03', title: 'Real-time Coordination', desc: 'Track volunteer status, chat in real-time, and coordinate seamlessly.', icon: '📡' },
-  { step: '04', title: 'Help Delivered', desc: 'Rate your volunteer, earn trust points, and build community karma.', icon: '🎉' },
+const IMPACT_STATS = [
+  { label: 'Verified Members', value: 'Growing', icon: ShieldCheck, accent: 'orange' },
+  { label: 'Active Communities', value: 'Expanding', icon: Users, accent: 'blue' },
+  { label: 'Real Impact', value: 'Measurable', icon: HeartHandshake, accent: 'orange' },
+  { label: 'Help Available', value: 'Always', icon: BellRing, accent: 'blue' },
 ];
 
-const WHY_HVHN = [
-  { title: '🔐 Verified Network', desc: 'Every volunteer is verified through community codes and email domains. No strangers.' },
-  { title: '⚡ AI-Powered Matching', desc: 'Smart classification and tiered notification ensures the right help reaches you first.' },
-  { title: '🏘️ Community-Centric', desc: 'Join your college, society, or organization. Help stays hyperlocal and trusted.' },
-  { title: '🏆 Gamified Impact', desc: 'Earn points, unlock badges, climb leaderboards — doing good feels rewarding.' },
+const HOW_STEPS = [
+  { title: 'Raise a Request', text: 'Share your need with your local community in seconds.', icon: HelpCircle },
+  { title: 'Get Matched', text: 'Verified helpers near you get notified.', icon: Target },
+  { title: 'Coordinate & Resolve', text: 'Communicate, collaborate, and get the help you need.', icon: MessageSquare },
+  { title: 'Stay Safe', text: 'Every interaction is verified and community-driven.', icon: ShieldCheck },
 ];
 
-const TOP_VOLUNTEERS = [
-  { name: 'Priya Patel', points: 2450, badge: 'Hero', helped: 89, avatar: 'P' },
-  { name: 'Amit Kumar', points: 1820, badge: 'Champion', helped: 62, avatar: 'A' },
-  { name: 'Sneha Gupta', points: 1540, badge: 'Champion', helped: 48, avatar: 'S' },
+const INTELLIGENCE_STEPS = [
+  {
+    step: 'STEP 1',
+    title: 'Request Context',
+    icon: Search,
+    items: ['need', 'location', 'urgency', 'category'],
+    accent: 'orange',
+  },
+  {
+    step: 'STEP 2',
+    title: 'Smart Matching',
+    icon: Network,
+    items: ['category', 'urgency', 'proximity', 'volunteer categories', 'availability', 'historical reliability'],
+    accent: 'blue',
+  },
+  {
+    step: 'STEP 3',
+    title: 'Priority & Trust',
+    icon: Sparkles,
+    items: ['urgency', 'relevance', 'reliability', 'verification', 'proximity'],
+    accent: 'blue',
+  },
+  {
+    step: 'STEP 4',
+    title: 'Coordinate & Resolve',
+    icon: CheckCircle2,
+    items: ['messaging', 'updates', 'collaboration', 'completion'],
+    accent: 'orange',
+  },
 ];
+
+const COMMUNITY_FEATURES = [
+  { title: 'Join trusted local groups', icon: Users, accent: 'blue' },
+  { title: 'Community Q&A', icon: HelpCircle, accent: 'orange' },
+  { title: 'Campaigns & announcements', icon: Radio, accent: 'blue' },
+  { title: 'Members & collaboration', icon: HeartHandshake, accent: 'orange' },
+];
+
+const COMMUNITY_PREVIEW = [
+  { name: 'Campus Help Circles', meta: 'Student-led emergency coordination' },
+  { name: 'Apartment Support Groups', meta: 'Residents helping nearby residents' },
+  { name: 'Health & Care Networks', meta: 'Verified local medical support' },
+];
+
+const SAFETY_ITEMS = [
+  { title: 'Verified profiles', icon: ShieldCheck },
+  { title: 'Privacy-aware locations', icon: MapPin },
+  { title: 'Lifecycle tracking', icon: CheckCircle2 },
+  { title: 'Community moderation', icon: LockKeyhole },
+];
+
+function Logo() {
+  return <BrandLogo />;
+}
+
+function ThemeToggle() {
+  const { isDark, toggleTheme } = useTheme();
+  return (
+    <button
+      className="landing-theme-toggle"
+      type="button"
+      onClick={toggleTheme}
+      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      <Sun size={17} aria-hidden="true" />
+      <span className="landing-theme-toggle__thumb">
+        {isDark ? <Moon size={15} aria-hidden="true" /> : <Sun size={15} aria-hidden="true" />}
+      </span>
+      <Moon size={17} aria-hidden="true" />
+    </button>
+  );
+}
+
+function LandingLink({ authenticatedTo, guestTo, children, className }) {
+  const { user } = useAuth();
+  return (
+    <Link
+      to={user ? authenticatedTo : guestTo}
+      state={user ? undefined : { intendedAction: authenticatedTo, from: authenticatedTo }}
+      className={className}
+    >
+      {children}
+    </Link>
+  );
+}
 
 export default function Landing() {
   const { user } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [heroMissing, setHeroMissing] = useState(false);
 
-  // If logged in, redirect or show minimal version
-  if (user) {
-    return (
-      <div className="animate-in">
-        <div className="hero landing-hero-bg">
-          <div className="network-dots" />
-          <h1>Welcome back, {user.fullName?.split(' ')[0]}! 👋</h1>
-          <p className="hero-subtitle">
-            Your community needs you. Check the latest help requests or manage your volunteer settings.
-          </p>
-          <div className="hero-actions">
-            <Link to="/feed" className="btn btn-primary btn-lg">🆘 View Help Feed</Link>
-            <Link to="/volunteer/dashboard" className="btn btn-secondary btn-lg">📊 Volunteer Dashboard</Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const closeMobile = () => setMobileOpen(false);
 
   return (
-    <div className="animate-in">
-      {/* Hero */}
-      <div className="hero landing-hero-bg" style={{ paddingBottom: '40px' }}>
-        <div className="network-dots" />
-        <div style={{ fontSize: '3.5rem', marginBottom: '16px' }}>🤝</div>
-        <h1 style={{ fontSize: '3.8rem', lineHeight: '1.05', maxWidth: '800px', margin: '0 auto 20px' }}>
-          Help Your Neighbors.<br />Build Trust.<br />Save Lives.
-        </h1>
-        <p className="hero-subtitle" style={{ maxWidth: '650px' }}>
-          HVHN connects verified community members for hyperlocal help — from blood donation to emergency transport — powered by AI matching and real-time tracking.
-        </p>
-        <div className="hero-actions">
-          <Link to="/register" className="btn btn-primary btn-lg" style={{ padding: '16px 36px', fontSize: '1.1rem' }}>
-            Get Started — It's Free
-          </Link>
-          <Link to="/login" className="btn btn-secondary btn-lg" style={{ padding: '16px 36px', fontSize: '1.1rem' }}>
-            Sign In
-          </Link>
+    <div className="landing-page animate-in">
+      <header className="landing-nav">
+        <Link to={user ? '/feed' : '/'} className="landing-nav__brand" onClick={closeMobile}>
+          <Logo />
+        </Link>
+
+        <nav className={`landing-nav__links ${mobileOpen ? 'is-open' : ''}`} aria-label="Landing navigation">
+          {NAV_ITEMS.map((item) => (
+            <a key={item.href} href={item.href} onClick={closeMobile}>{item.label}</a>
+          ))}
+        </nav>
+
+        <div className="landing-nav__actions">
+          <ThemeToggle />
+          <Link className="landing-btn landing-btn--ghost" to="/login">Log In</Link>
+          <Link className="landing-btn landing-btn--orange" to="/register">Sign Up</Link>
+          <button
+            className="landing-menu-btn"
+            type="button"
+            onClick={() => setMobileOpen((open) => !open)}
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={mobileOpen}
+          >
+            {mobileOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
         </div>
-      </div>
+      </header>
 
-      {/* Stats */}
-      <div className="landing-stats-bar">
-        {STATS.map(s => (
-          <div key={s.label} className="landing-stat">
-            <div className="landing-stat-value">{s.value}</div>
-            <div className="landing-stat-label">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* How It Works */}
-      <div style={{ textAlign: 'center', padding: '60px 20px 20px' }}>
-        <h2 style={{ fontSize: '2.2rem', fontWeight: 900, marginBottom: '12px' }}>How It Works</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto' }}>
-          From request to resolution in four simple steps
-        </p>
-      </div>
-      <div className="feature-grid" style={{ maxWidth: '1000px', margin: '0 auto', padding: '20px' }}>
-        {HOW_IT_WORKS.map(step => (
-          <div key={step.step} className="feature-card" style={{ textAlign: 'left' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-              <div style={{ fontSize: '2.5rem' }}>{step.icon}</div>
-              <div style={{ fontSize: '2rem', fontWeight: 900, color: 'rgba(99,102,241,0.15)' }}>{step.step}</div>
+      <main className="landing-main">
+        <section id="hero" className="landing-hero">
+          <div className="landing-hero__copy">
+            <span className="landing-badge"><Zap size={16} /> Verified Help. Real Impact.</span>
+            <h1>
+              Help. Connect.
+              <span>Make a Difference.</span>
+            </h1>
+            <p>
+              Sahay connects verified neighbors, volunteers, and organizations to solve real problems in real time right in your community.
+            </p>
+            <div className="landing-hero__actions">
+              <LandingLink authenticatedTo="/create" guestTo="/register" className="landing-btn landing-btn--orange landing-btn--lg">
+                Raise a Request <ArrowRight size={18} />
+              </LandingLink>
+              <LandingLink authenticatedTo="/feed" guestTo="/login" className="landing-btn landing-btn--blue-outline landing-btn--lg">
+                I Want to Help <HeartHandshake size={18} />
+              </LandingLink>
             </div>
-            <h3 style={{ marginBottom: '8px' }}>{step.title}</h3>
-            <p>{step.desc}</p>
+            <div className="landing-trust-row" aria-label="Trusted community">
+              <span className="landing-avatar-stack" aria-hidden="true">
+                <span>A</span><span>P</span><span>S</span><span>R</span>
+              </span>
+              <span>Trusted by verified members across growing communities</span>
+            </div>
           </div>
-        ))}
-      </div>
 
-      {/* Categories */}
-      <div style={{ textAlign: 'center', padding: '60px 20px 20px' }}>
-        <h2 style={{ fontSize: '2.2rem', fontWeight: 900, marginBottom: '12px' }}>Help Categories</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto' }}>
-          Whatever you need, there's a verified volunteer ready to help
-        </p>
-      </div>
-      <div className="landing-categories" style={{ paddingBottom: '40px' }}>
-        {CATEGORIES.map(cat => (
-          <div key={cat.name} className="landing-category-card">
-            <div className="landing-category-icon">{cat.icon}</div>
-            <h4>{cat.name}</h4>
-            <p>{cat.desc}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Why HVHN */}
-      <div style={{ textAlign: 'center', padding: '60px 20px 20px' }}>
-        <h2 style={{ fontSize: '2.2rem', fontWeight: 900, marginBottom: '12px' }}>Why HVHN?</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto' }}>
-          A trusted, gamified, AI-powered community help network
-        </p>
-      </div>
-      <div className="why-hvhn-grid" style={{ padding: '20px', paddingBottom: '40px' }}>
-        {WHY_HVHN.map(item => (
-          <div key={item.title} className="why-hvhn-card">
-            <h4>{item.title}</h4>
-            <p>{item.desc}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Top Volunteers */}
-      <div style={{ textAlign: 'center', padding: '60px 20px 20px' }}>
-        <h2 style={{ fontSize: '2.2rem', fontWeight: 900, marginBottom: '12px' }}>Top Volunteers</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto' }}>
-          Real people making real impact in their communities
-        </p>
-      </div>
-      <div className="top-volunteers-grid" style={{ padding: '20px', paddingBottom: '60px' }}>
-        {TOP_VOLUNTEERS.map((v, i) => (
-          <div key={v.name} className="top-volunteer-card">
-            <div style={{ position: 'relative', display: 'inline-block', marginBottom: '12px' }}>
-              <div className="profile-avatar" style={{ width: '64px', height: '64px', fontSize: '1.5rem', margin: '0 auto', background: i === 0 ? 'linear-gradient(135deg, #f59e0b, #ef4444)' : i === 1 ? 'linear-gradient(135deg, #6366f1, #06b6d4)' : 'linear-gradient(135deg, #10b981, #06b6d4)' }}>
-                {v.avatar}
+          <div className="landing-hero__visual" aria-label="Sahay community volunteers">
+            <div className="landing-network-pattern" aria-hidden="true" />
+            <div className="landing-hero-image-shell">
+              {!heroMissing && (
+                <img
+                  src={HERO_IMAGE}
+                  alt="Four young Indian community volunteers with hands joined in the center"
+                  loading="eager"
+                  fetchpriority="high"
+                  onError={() => setHeroMissing(true)}
+                />
+              )}
+              {heroMissing && (
+                <div className="landing-hero-image-missing" role="note">
+                  <strong>Exact hero image asset required</strong>
+                  <span>frontend/public/assets/sahay-landing-hero.png</span>
+                </div>
+              )}
+              <div className="landing-floating-stats">
+                {HERO_STATS.map((stat) => (
+                  <div key={stat.label} className={`landing-floating-stat is-${stat.accent}`}>
+                    <strong>{stat.value}</strong>
+                    <span>{stat.label}</span>
+                  </div>
+                ))}
               </div>
-              {i === 0 && <div style={{ position: 'absolute', top: '-8px', right: '-8px', fontSize: '1.3rem' }}>👑</div>}
-            </div>
-            <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: '4px' }}>{v.name}</div>
-            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', marginBottom: '8px' }}>
-              <span className="badge badge-category">{v.badge}</span>
-            </div>
-            <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              {v.helped} people helped • {v.points} pts
             </div>
           </div>
-        ))}
-      </div>
+        </section>
 
-      {/* CTA */}
-      <div style={{ textAlign: 'center', padding: '60px 20px 80px', background: 'rgba(99,102,241,0.03)', borderTop: '1px solid var(--border)' }}>
-        <h2 style={{ fontSize: '2.5rem', fontWeight: 900, marginBottom: '16px', background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-          Ready to Make a Difference?
-        </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto 32px' }}>
-          Join thousands of verified community members who are building a safer, more connected neighborhood.
-        </p>
-        <div className="hero-actions">
-          <Link to="/register" className="btn btn-primary btn-lg" style={{ padding: '16px 44px', fontSize: '1.1rem' }}>
-            Join HVHN Now
-          </Link>
+        <section id="features" className="landing-impact-strip" aria-label="Sahay impact statistics">
+          {IMPACT_STATS.map(({ label, value, icon: Icon, accent }) => (
+            <div key={label} className={`landing-impact-card is-${accent}`}>
+              <Icon size={22} aria-hidden="true" />
+              <strong>{value}</strong>
+              <span>{label}</span>
+            </div>
+          ))}
+        </section>
+
+        <section id="how-it-works" className="landing-section">
+          <div className="landing-section__header">
+            <span>HOW IT WORKS</span>
+            <h2>Simple steps. Real impact.</h2>
+          </div>
+          <div className="landing-how-grid">
+            {HOW_STEPS.map(({ title, text, icon: Icon }, index) => (
+              <article key={title} className="landing-step-card">
+                <div className="landing-step-card__top">
+                  <span>{index + 1}</span>
+                  <Icon size={24} aria-hidden="true" />
+                </div>
+                <h3>{title}</h3>
+                <p>{text}</p>
+                {index < HOW_STEPS.length - 1 && <ChevronRight className="landing-step-arrow" size={24} aria-hidden="true" />}
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="landing-section landing-intelligence">
+          <div className="landing-section__header">
+            <span>SMART MATCHING</span>
+            <h2>How Sahay intelligence works</h2>
+            <p>
+              Sahay&apos;s intelligence layer is designed to combine location and trust signals, with ML intelligence being introduced through upcoming matching models.
+            </p>
+          </div>
+          <div className="landing-intel-flow">
+            {INTELLIGENCE_STEPS.map(({ step, title, items, icon: Icon, accent }, index) => (
+              <article key={title} className={`landing-intel-card is-${accent}`}>
+                <small>{step}</small>
+                <Icon size={24} aria-hidden="true" />
+                <h3>{title}</h3>
+                <ul>
+                  {items.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                {index < INTELLIGENCE_STEPS.length - 1 && <ArrowRight className="landing-intel-arrow" size={25} aria-hidden="true" />}
+              </article>
+            ))}
+          </div>
+          <div className="landing-pipeline" aria-label="Smart matching pipeline">
+            {['Request Input', 'Smart Matching', 'Priority Score', 'Help Delivered'].map((item, index) => (
+              <span key={item} className={index === 0 || index === 3 ? 'is-impact' : ''}>{item}</span>
+            ))}
+          </div>
+        </section>
+
+        <section id="communities" className="landing-section landing-communities">
+          <div className="landing-community-copy">
+            <span className="landing-kicker">COMMUNITIES</span>
+            <h2>Community Spaces</h2>
+            <p>
+              Join local groups, coordinate help, run campaigns, ask questions, and connect with nearby verified members.
+            </p>
+            <LandingLink authenticatedTo="/communities" guestTo="/login" className="landing-btn landing-btn--blue landing-btn--lg">
+              Explore Communities <ArrowRight size={18} />
+            </LandingLink>
+            <div className="landing-community-features">
+              {COMMUNITY_FEATURES.map(({ title, icon: Icon, accent }) => (
+                <article key={title} className={`landing-mini-card is-${accent}`}>
+                  <Icon size={20} aria-hidden="true" />
+                  <h3>{title}</h3>
+                </article>
+              ))}
+            </div>
+          </div>
+          <aside className="landing-popular-panel" aria-label="Community preview">
+            <div className="landing-popular-panel__header">
+              <h3>Popular Communities</h3>
+              <Link to={user ? '/communities' : '/login'}>View all</Link>
+            </div>
+            {COMMUNITY_PREVIEW.map((community, index) => (
+              <div key={community.name} className="landing-community-preview">
+                <span aria-hidden="true">{community.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span>
+                <div>
+                  <strong>{community.name}</strong>
+                  <small>{community.meta}</small>
+                </div>
+                <i>{index + 1}</i>
+              </div>
+            ))}
+            <p>This preview avoids dynamic member counts until public discovery data is available.</p>
+          </aside>
+        </section>
+
+        <section id="safety" className="landing-safety">
+          {SAFETY_ITEMS.map(({ title, icon: Icon }) => (
+            <article key={title}>
+              <Icon size={22} aria-hidden="true" />
+              <h3>{title}</h3>
+            </article>
+          ))}
+        </section>
+      </main>
+
+      <footer id="about" className="landing-footer">
+        <div className="landing-footer__brand">
+          <Logo />
+          <p>Building safer, stronger communities through trust, technology, and kindness.</p>
         </div>
-      </div>
+        <div>
+          <h3>Platform</h3>
+          <Link to="/feed">Help Feed</Link>
+          <Link to="/create">Raise Request</Link>
+          <Link to="/volunteer/settings">Volunteer</Link>
+          <a href="#how-it-works">How It Works</a>
+          <a href="#safety">Safety</a>
+          <a href="#about">About Us</a>
+        </div>
+        <div>
+          <h3>Communities</h3>
+          <Link to="/communities">All Communities</Link>
+          <Link to="/communities">Create Community</Link>
+          <a href="#safety">Community Rules</a>
+          <a href="#communities">Local Leaders</a>
+        </div>
+        <div>
+          <h3>Resources</h3>
+          <a href="#how-it-works">FAQs</a>
+          <a href="#safety">Safety Tips</a>
+          <Link to="/login">Privacy</Link>
+          <Link to="/login">Terms of Service</Link>
+          <Link to="/login">Contact support</Link>
+        </div>
+        <div className="landing-footer__bottom">(c) 2026 Sahay. All rights reserved.</div>
+      </footer>
     </div>
   );
 }

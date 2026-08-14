@@ -1,85 +1,72 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, ArrowDown, Check, CheckCheck, Clock3, MoreHorizontal, RefreshCcw, Reply, Smile, Trash2 } from 'lucide-react';
 import apiService from '../../services/api';
+import { Avatar, Button, ConfirmationDialog, DropdownMenu, IconButton, Skeleton } from '../ui';
 import ChatInput from './ChatInput';
 import ConnectionBanner from './ConnectionBanner';
 import TypingIndicator from './TypingIndicator';
 
+const REACTIONS = ['👍', '❤️', '🙂', '🙏'];
+
 function formatTime(value) {
   if (!value) return '';
-  return new Date(value).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatDayLabel(value) {
-  const date = new Date(value);
+  const date = value ? new Date(value) : new Date();
   const today = new Date();
   const yesterday = new Date();
   yesterday.setDate(today.getDate() - 1);
 
-  const isSameDay = (left, right) =>
+  const sameDay = (left, right) =>
     left.getFullYear() === right.getFullYear()
       && left.getMonth() === right.getMonth()
       && left.getDate() === right.getDate();
 
-  if (isSameDay(date, today)) return 'Today';
-  if (isSameDay(date, yesterday)) return 'Yesterday';
-
-  return date.toLocaleDateString([], {
-    day: '2-digit',
-    month: 'short',
-  });
+  if (sameDay(date, today)) return 'Today';
+  if (sameDay(date, yesterday)) return 'Yesterday';
+  return date.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function getAttachment(content = '') {
-  if (!content.startsWith('attachment:')) return null;
-
-  const encoded = content.slice('attachment:'.length);
-  const [url = '', fileName = 'Attachment', contentType = ''] = encoded.split('|');
-
-  if (!url) return null;
-
-  const lowerUrl = url.toLowerCase();
-  const isImage =
-    String(contentType).startsWith('image/')
-    || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].some((suffix) => lowerUrl.endsWith(suffix));
-
-  return {
-    url,
-    fileName,
-    contentType,
-    isImage,
-  };
-}
-
-function resolveAttachmentUrl(url) {
-  if (!url?.startsWith('/')) return url;
-
-  const configuredBaseUrl = import.meta.env.VITE_BACKEND_URL;
-  if (configuredBaseUrl) {
-    return `${configuredBaseUrl}${url}`;
-  }
-
-  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-  const host = window.location.hostname || 'localhost';
-  return `${protocol}//${host}:8080${url}`;
+function messageKey(message) {
+  return message?.clientMessageId || message?.id || `${message?.timestamp || ''}-${message?.content || ''}`;
 }
 
 function mergeMessages(existingMessages, nextMessages, mode = 'append') {
-  const safeExisting = Array.isArray(existingMessages) ? existingMessages : [];
-  const safeNext = Array.isArray(nextMessages) ? nextMessages : [];
-  
   const ordered = mode === 'prepend'
-    ? [...safeNext, ...safeExisting]
-    : [...safeExisting, ...safeNext];
-
-  const seen = new Set();
-  return ordered.filter((message) => {
-    if (!message?.id || seen.has(message.id)) return false;
-    seen.add(message.id);
-    return true;
+    ? [...(nextMessages || []), ...(existingMessages || [])]
+    : [...(existingMessages || []), ...(nextMessages || [])];
+  const byKey = new Map();
+  ordered.forEach((message) => {
+    const key = messageKey(message);
+    if (!key) return;
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? { ...existing, ...message, deliveryState: message.deliveryState || existing.deliveryState } : message);
   });
+  return Array.from(byKey.values()).sort((left, right) => new Date(left.timestamp || left.createdAt || 0) - new Date(right.timestamp || right.createdAt || 0));
+}
+
+function getDeliveryState(message) {
+  const state = String(message.deliveryState || message.status || '').toUpperCase();
+  if (state === 'FAILED') return { label: 'Failed', icon: AlertCircle };
+  if (state === 'SENDING' || message.pending) return { label: 'Sending', icon: Clock3 };
+  if (message.seen || message.read || state === 'SEEN' || state === 'READ') return { label: 'Seen', icon: CheckCheck };
+  if (message.delivered || state === 'DELIVERED') return { label: 'Delivered', icon: CheckCheck };
+  return { label: 'Sent', icon: Check };
+}
+
+function isSameSenderClose(previous, message) {
+  if (!previous || previous.senderId !== message.senderId) return false;
+  const previousTime = new Date(previous.timestamp || previous.createdAt || 0).getTime();
+  const currentTime = new Date(message.timestamp || message.createdAt || 0).getTime();
+  return Math.abs(currentTime - previousTime) < 5 * 60 * 1000;
+}
+
+function normalizeReactionUsers(users) {
+  if (Array.isArray(users)) return users;
+  if (typeof users === 'number') return Array.from({ length: users }, (_, index) => `count-${index}`);
+  return [];
 }
 
 export default function ChatWindow({
@@ -91,7 +78,6 @@ export default function ChatWindow({
   connectionStatus,
   onSendMessage,
   onTypingChange,
-  onUploadAttachment,
   onMessagesRead,
   onDeleteMessage,
   prefillText,
@@ -105,8 +91,8 @@ export default function ChatWindow({
   const [error, setError] = useState('');
   const [messageToDelete, setMessageToDelete] = useState(null);
   const [replyTarget, setReplyTarget] = useState(null);
-  const [openDropdownId, setOpenDropdownId] = useState(null);
-  const [showReactionPickerId, setShowReactionPickerId] = useState(null);
+  const [reactionPickerId, setReactionPickerId] = useState('');
+  const [newMessageCount, setNewMessageCount] = useState(0);
 
   const scrollerRef = useRef(null);
   const pendingScrollAdjustmentRef = useRef(null);
@@ -115,14 +101,10 @@ export default function ChatWindow({
 
   async function loadHistory(nextPage, mode = 'replace') {
     if (!room?.id) return;
-
-    if (mode === 'replace') {
-      setLoading(true);
-    } else {
-      setLoadingMore(true);
-    }
-
+    if (mode === 'replace') setLoading(true);
+    else setLoadingMore(true);
     setError('');
+
     const scroller = scrollerRef.current;
     if (mode === 'prepend' && scroller) {
       pendingScrollAdjustmentRef.current = {
@@ -134,16 +116,11 @@ export default function ChatWindow({
     try {
       const response = await apiService.getChatHistory(room.id, nextPage, 50);
       const nextMessages = response.data?.messages || [];
-
-      setMessages((current) => {
-        if (mode === 'replace') return nextMessages;
-        return mergeMessages(current, nextMessages, 'prepend');
-      });
-
+      setMessages((current) => (mode === 'replace' ? nextMessages : mergeMessages(current, nextMessages, 'prepend')));
       setPage(nextPage);
       setHasMore(Boolean(response.data?.hasMore));
     } catch (loadError) {
-      setError(loadError.message || 'We could not load this chat history.');
+      setError(loadError.message || 'We could not load this conversation.');
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -155,301 +132,307 @@ export default function ChatWindow({
     setPage(0);
     setHasMore(false);
     setError('');
+    setReplyTarget(null);
+    setNewMessageCount(0);
     lastReadMessageIdRef.current = '';
     shouldStickToBottomRef.current = true;
-
-    if (room?.id) {
-      loadHistory(0, 'replace');
-    }
+    if (room?.id) loadHistory(0, 'replace');
   }, [room?.id]);
 
   useEffect(() => {
     if (!Array.isArray(liveMessages) || !liveMessages.length) return;
     setMessages((current) => mergeMessages(current, liveMessages));
+    if (!shouldStickToBottomRef.current) {
+      setNewMessageCount((current) => current + liveMessages.length);
+    }
   }, [liveMessages]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-
     if (pendingScrollAdjustmentRef.current) {
       const { previousHeight, previousTop } = pendingScrollAdjustmentRef.current;
       scroller.scrollTop = scroller.scrollHeight - previousHeight + previousTop;
       pendingScrollAdjustmentRef.current = null;
       return;
     }
-
     if (!shouldStickToBottomRef.current) return;
-    scroller.scrollTo({
-      top: scroller.scrollHeight,
-      behavior: 'smooth'
-    });
+    if (typeof scroller.scrollTo === 'function') {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    } else {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+    setNewMessageCount(0);
   }, [messages]);
 
   useEffect(() => {
     if (!room?.id || !messages.length) return;
-
     const latestMessage = messages[messages.length - 1];
     if (!latestMessage?.id || latestMessage.senderId === currentUserId) return;
     if (lastReadMessageIdRef.current === latestMessage.id) return;
-
     lastReadMessageIdRef.current = latestMessage.id;
-    onMessagesRead(latestMessage.id);
+    onMessagesRead?.(latestMessage.id);
   }, [currentUserId, messages, onMessagesRead, room?.id]);
 
   function handleScroll(event) {
     const element = event.currentTarget;
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom < 80;
+    shouldStickToBottomRef.current = distanceFromBottom < 96;
+    if (shouldStickToBottomRef.current) setNewMessageCount(0);
+    if (element.scrollTop <= 48 && hasMore && !loadingMore) loadHistory(page + 1, 'prepend');
+  }
 
-    if (element.scrollTop <= 40 && hasMore && !loadingMore) {
-      loadHistory(page + 1, 'prepend');
+  function scrollToLatest() {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    shouldStickToBottomRef.current = true;
+    setNewMessageCount(0);
+    if (typeof scroller.scrollTo === 'function') {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    } else {
+      scroller.scrollTop = scroller.scrollHeight;
     }
+  }
+
+  async function sendWithOptimism(content, replyToId = null, retryingId = null) {
+    const clientMessageId = retryingId || `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticMessage = {
+      id: clientMessageId,
+      clientMessageId,
+      roomId: room.id,
+      senderId: currentUserId,
+      senderName: 'You',
+      content,
+      replyToMessageId: replyToId,
+      timestamp: new Date().toISOString(),
+      deliveryState: 'SENDING',
+      pending: true,
+    };
+
+    setMessages((current) => retryingId
+      ? current.map((message) => messageKey(message) === retryingId ? optimisticMessage : message)
+      : mergeMessages(current, [optimisticMessage]));
+
+    const sentId = await onSendMessage?.(content, replyToId, clientMessageId);
+    if (!sentId) {
+      setMessages((current) => current.map((message) => (
+        messageKey(message) === clientMessageId
+          ? { ...message, pending: false, deliveryState: 'FAILED' }
+          : message
+      )));
+      return false;
+    }
+    setReplyTarget(null);
+    return true;
   }
 
   async function toggleReaction(messageId, emoji) {
-    // This would normally call an API. Since we added it to backend, 
-    // we'll optimisticly update and call service if implemented.
-    setMessages(prev => prev.map(m => {
-      if (m.id !== messageId) return m;
-      const nextReactions = { ...(m.reactions || {}) };
-      const users = [...(nextReactions[emoji] || [])];
-      const index = users.indexOf(currentUserId);
-      if (index > -1) users.splice(index, 1);
-      else users.push(currentUserId);
-      
-      if (users.length === 0) delete nextReactions[emoji];
-      else nextReactions[emoji] = users;
-      
-      return { ...m, reactions: nextReactions };
+    const previousMessages = messages;
+    setMessages((current) => current.map((message) => {
+      if (messageKey(message) !== messageId) return message;
+      const reactions = { ...(message.reactions || {}) };
+      const users = normalizeReactionUsers(reactions[emoji]);
+      const currentUserIndex = users.indexOf(currentUserId);
+      const nextUsers = currentUserIndex >= 0
+        ? users.filter((userId) => userId !== currentUserId)
+        : [...users, currentUserId];
+      if (nextUsers.length) reactions[emoji] = nextUsers;
+      else delete reactions[emoji];
+      return { ...message, reactions };
     }));
+    try {
+      const response = await apiService.toggleChatReaction(messageId, emoji);
+      setMessages((current) => current.map((message) => (messageKey(message) === messageId ? response.data : message)));
+    } catch {
+      setMessages(previousMessages);
+    }
   }
 
-  function renderMessage(message, previousMessage, nextMessage) {
-    const isSelf = message.senderId === currentUserId;
-    const attachment = getAttachment(message.content || '');
-    const isSystemMessage = message.messageType && message.messageType !== 'CHAT';
-    const dayLabel = formatDayLabel(message.timestamp);
-    const previousDayLabel = previousMessage ? formatDayLabel(previousMessage.timestamp) : '';
-    const showDayDivider = dayLabel !== previousDayLabel;
-
-    // Unread divider logic
-    const isFirstUnread = !isSelf && !message.read && (previousMessage?.read || !previousMessage);
-
-    // Reply context
-    const quotedMessage = message.replyToMessageId 
-      ? messages.find(m => m.id === message.replyToMessageId) 
-      : null;
-
-    // Search highlighting
-    const isHighlighted = searchQuery && message.content?.toLowerCase().includes(searchQuery.toLowerCase());
-
-    return (
-      <div key={message.id} style={{ opacity: isHighlighted === false && searchQuery ? 0.4 : 1, transition: 'opacity 0.2s' }}>
-        {showDayDivider && <div className="chat-date-separator" style={{ margin: '24px 0 16px', fontSize: '0.75rem', fontWeight: 700, opacity: 0.5, textTransform: 'uppercase', letterSpacing: '1px' }}>{dayLabel}</div>}
-        
-        {isFirstUnread && <div className="chat-unread-divider">Unread Messages</div>}
-
-        {isSystemMessage ? (
-          <div className="chat-system-message" style={{ margin: '12px 0', fontSize: '0.8rem', opacity: 0.6 }}>{message.content}</div>
-        ) : (
-          <div className={`chat-message-row ${isSelf ? 'chat-message-row-self' : ''}`} style={{ marginBottom: '4px' }}>
-            {!isSelf && (
-              <div className="chat-message-avatar" style={{ alignSelf: 'flex-end', width: '32px', height: '32px', fontSize: '0.8rem', marginBottom: '4px' }}>
-                {message.avatarInitial || 'U'}
-              </div>
-            )}
-
-            <div 
-              className={`chat-bubble ${isSelf ? 'chat-bubble-self' : 'chat-bubble-member'}`}
-              style={{ border: isHighlighted ? '2px solid var(--accent-primary)' : 'none' }}
-            >
-              {quotedMessage && (
-                <div className="chat-reply-preview" style={{ cursor: 'pointer' }} onClick={() => {
-                  const el = document.getElementById(`msg-${quotedMessage.id}`);
-                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  el?.classList.add('highlight-animation');
-                  setTimeout(() => el?.classList.remove('highlight-animation'), 2000);
-                }}>
-                  <strong style={{ fontSize: '0.75rem' }}>{quotedMessage.senderName}</strong>
-                  <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quotedMessage.content}</div>
-                </div>
-              )}
-
-              <div className="chat-bubble-content-wrapper" style={{ paddingRight: '20px' }}>
-                <div id={`msg-${message.id}`} style={{ wordBreak: 'break-word', lineHeight: '1.4' }}>
-                  {attachment ? (
-                    <div className="chat-attachment" style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '4px' }}>
-                      {attachment.isImage ? (
-                        <a href={resolveAttachmentUrl(attachment.url)} target="_blank" rel="noreferrer">
-                          <img
-                            src={resolveAttachmentUrl(attachment.url)}
-                            alt={attachment.fileName}
-                            style={{ maxWidth: '100%', maxHeight: '300px', display: 'block' }}
-                          />
-                        </a>
-                      ) : (
-                        <a href={resolveAttachmentUrl(attachment.url)} target="_blank" rel="noreferrer" className="chat-attachment-link">
-                          📄 {attachment.fileName}
-                        </a>
-                      )}
-                    </div>
-                  ) : (
-                    message.content
-                  )}
-                </div>
-
-                <div className="chat-message-info">
-                  <span>{formatTime(message.timestamp)}</span>
-                  {isSelf && (
-                    <span style={{ color: message.read ? '#3b82f6' : 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>
-                      {message.read ? '✓✓' : '✓✓'}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Reactions UI */}
-              {message.reactions && Object.keys(message.reactions).length > 0 && (
-                <div className="chat-reactions-row">
-                  {Object.entries(message.reactions).map(([emoji, users]) => (
-                    <div 
-                      key={emoji} 
-                      className="chat-reaction-chip"
-                      onClick={() => toggleReaction(message.id, emoji)}
-                      style={{ background: users.includes(currentUserId) ? 'var(--accent-primary-alpha)' : 'var(--bg-card)' }}
-                    >
-                      {emoji} <span>{users.length}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Message Actions Dropdown */}
-              <div className="message-actions-container">
-                <button 
-                  className="btn btn-icon btn-sm" 
-                  onClick={() => setOpenDropdownId(openDropdownId === message.id ? null : message.id)}
-                  style={{ background: 'var(--bg-card)', boxShadow: 'var(--shadow-sm)' }}
-                >
-                  ⋮
-                </button>
-                
-                {openDropdownId === message.id && (
-                  <>
-                    <div className="dropdown-backdrop" onClick={() => setOpenDropdownId(null)} style={{ position: 'fixed', inset: 0, zIndex: 999 }} />
-                    <div className="message-actions-dropdown">
-                      <button className="dropdown-item" onClick={() => { setReplyTarget(message); setOpenDropdownId(null); }}>
-                        ↩️ Reply
-                      </button>
-                      <button className="dropdown-item" onClick={() => { setShowReactionPickerId(message.id); setOpenDropdownId(null); }}>
-                        😀 React
-                      </button>
-                      {isSelf && (
-                        <button className="dropdown-item danger" onClick={() => { setMessageToDelete(message.id); setOpenDropdownId(null); }}>
-                          🗑️ Delete
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Mini Reaction Picker */}
-              {showReactionPickerId === message.id && (
-                <>
-                  <div className="dropdown-backdrop" onClick={() => setShowReactionPickerId(null)} style={{ position: 'fixed', inset: 0, zIndex: 1000 }} />
-                  <div className="reaction-picker-mini">
-                    {['👍', '❤️', '😂', '😮', '😢', '🔥'].map(emoji => (
-                      <button 
-                        key={emoji} 
-                        className="reaction-btn-mini" 
-                        onClick={() => { toggleReaction(message.id, emoji); setShowReactionPickerId(null); }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const handleDeleteConfirm = async () => {
+  async function handleDeleteConfirm() {
     if (!messageToDelete) return;
     try {
       if (onDeleteMessage) await onDeleteMessage(messageToDelete);
-      setMessages(prev => (Array.isArray(prev) ? prev : []).filter(m => m.id !== messageToDelete));
-    } catch (err) {
-      console.error("Failed to delete", err);
+      setMessages((current) => current.filter((message) => messageKey(message) !== messageToDelete));
     } finally {
       setMessageToDelete(null);
     }
-  };
+  }
 
-  if (!room) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Select a conversation.</div>;
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages;
+    const query = searchQuery.trim().toLowerCase();
+    return messages.map((message) => ({
+      ...message,
+      isDimmedBySearch: !String(message.content || '').toLowerCase().includes(query),
+    }));
+  }, [messages, searchQuery]);
+
+  if (!room) {
+    return <div className="p7c-chat-empty">Select a conversation.</div>;
+  }
 
   return (
-    <div className="chat-window" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div className="p7c-chat-window">
       <ConnectionBanner status={connectionStatus} />
 
       {room.requestId && (
-        <div style={{ padding: '8px 16px', background: 'var(--accent-primary-alpha)', borderBottom: '1px solid var(--border)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          <span style={{ opacity: 0.6 }}>🔗 Thread context:</span>
-          <strong>{room.requestTitle || `Request #${room.requestId?.slice(-4)}`}</strong>
-          <a href={`/volunteer/request/${room.requestId}`} style={{ marginLeft: 'auto', textDecoration: 'none', color: 'var(--accent-primary)', fontWeight: 600 }}>View Details →</a>
+        <div className="p7c-thread-context">
+          <span>Thread context</span>
+          <strong>{room.requestTitle || `Request ${String(room.requestId).slice(-4)}`}</strong>
+          <a href={`/volunteer/request/${room.requestId}`}>View request</a>
         </div>
       )}
 
-      <div ref={scrollerRef} className="chat-messages-container" onScroll={handleScroll}>
-        {loadingMore && <div className="chat-loading-more">Loading history...</div>}
-        {messages.map((message, index) => renderMessage(message, messages[index - 1], messages[index + 1]))}
-        <div style={{ minHeight: '1px' }} />
+      <div ref={scrollerRef} className="p7c-message-scroll" onScroll={handleScroll} aria-label="Message history">
+        {loading ? (
+          <div className="p7c-message-skeleton"><Skeleton lines={8} /></div>
+        ) : error ? (
+          <div className="p7c-chat-error">
+            <p>{error}</p>
+            <Button type="button" variant="secondary" size="sm" onClick={() => loadHistory(0, 'replace')}>
+              <RefreshCcw size={16} /> Retry
+            </Button>
+          </div>
+        ) : (
+          <>
+            {loadingMore && <div className="p7c-loading-more">Loading older messages</div>}
+            {filteredMessages.map((message, index) => {
+              const previousMessage = filteredMessages[index - 1];
+              const key = messageKey(message);
+              const isSelf = message.senderId === currentUserId;
+              const isSystemMessage = message.messageType && message.messageType !== 'CHAT';
+              const showDayDivider = formatDayLabel(message.timestamp || message.createdAt) !== formatDayLabel(previousMessage?.timestamp || previousMessage?.createdAt);
+              const grouped = isSameSenderClose(previousMessage, message);
+              const quoted = message.replyToMessageId ? messages.find((entry) => messageKey(entry) === message.replyToMessageId) : null;
+              const delivery = getDeliveryState(message);
+              const DeliveryIcon = delivery.icon;
+
+              return (
+                <div key={key} className={message.isDimmedBySearch ? 'p7c-message-dimmed' : ''}>
+                  {showDayDivider && <div className="p7c-date-separator"><span>{formatDayLabel(message.timestamp || message.createdAt)}</span></div>}
+                  {isSystemMessage ? (
+                    <div className="p7c-system-message">{message.content}</div>
+                  ) : (
+                    <article className={`p7c-message-row ${isSelf ? 'is-self' : 'is-other'} ${grouped ? 'is-grouped' : ''}`} aria-label={`${isSelf ? 'Your' : message.senderName || 'Member'} message`}>
+                      {!isSelf && !grouped && <div className="p7c-message-avatar"><Avatar name={message.senderName || 'Member'} src={message.avatarUrl || message.profileImage} size="sm" /></div>}
+                      {!isSelf && grouped && <div className="p7c-message-avatar-spacer" />}
+                      <div className="p7c-message-stack">
+                        {!isSelf && !grouped && <span className="p7c-message-author">{message.senderName || 'Community member'}</span>}
+                        <div className="p7c-message-bubble">
+                          {quoted && (
+                            <button type="button" className="p7c-reply-preview" onClick={() => document.getElementById(`msg-${messageKey(quoted)}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>
+                              <strong>{quoted.senderName || 'Message'}</strong>
+                              <span>{quoted.content}</span>
+                            </button>
+                          )}
+                          <p id={`msg-${key}`}>{message.content}</p>
+                          <div className="p7c-message-meta">
+                            <span>{formatTime(message.timestamp || message.createdAt)}</span>
+                            {isSelf && (
+                              <span className={`p7c-delivery p7c-delivery--${delivery.label.toLowerCase()}`} aria-label={`Delivery status: ${delivery.label}`}>
+                                <DeliveryIcon size={13} aria-hidden="true" />
+                                {delivery.label}
+                              </span>
+                            )}
+                          </div>
+                          {message.deliveryState === 'FAILED' && (
+                            <button type="button" className="p7c-retry" onClick={() => sendWithOptimism(message.content, message.replyToMessageId, key)}>
+                              <RefreshCcw size={13} /> Retry
+                            </button>
+                          )}
+                        </div>
+                        {message.reactions && Object.keys(message.reactions).length > 0 && (
+                          <div className="p7c-reactions" aria-label="Message reactions">
+                            {Object.entries(message.reactions).map(([emoji, users]) => {
+                              const normalizedUsers = normalizeReactionUsers(users);
+                              const active = normalizedUsers.includes(currentUserId);
+                              return (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  className={active ? 'is-active' : ''}
+                                  onClick={() => toggleReaction(key, emoji)}
+                                  aria-label={`${active ? 'Remove' : 'Add'} ${emoji} reaction, ${normalizedUsers.length} current`}
+                                >
+                                  <span>{emoji}</span>
+                                  <strong>{normalizedUsers.length}</strong>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="p7c-message-actions">
+                        <button 
+                          type="button" 
+                          className="p7c-msg-menu-btn" 
+                          onClick={() => setActiveMenuId(activeMenuId === key ? '' : key)}
+                          aria-label="Message actions"
+                        >
+                          <MoreHorizontal size={16} />
+                        </button>
+                        {activeMenuId === key && (
+                          <div className="p7c-msg-menu-popover" role="menu">
+                            <button type="button" onClick={() => { setReplyTarget(message); setActiveMenuId(''); }}><Reply size={14} /> Reply</button>
+                            <button type="button" onClick={() => { setReactionPickerId(reactionPickerId === key ? '' : key); setActiveMenuId(''); }}><Smile size={14} /> React</button>
+                            {isSelf && <button type="button" className="danger" onClick={() => { setMessageToDelete(key); setActiveMenuId(''); }}><Trash2 size={14} /> Delete for me</button>}
+                          </div>
+                        )}
+                        {reactionPickerId === key && (
+                          <div className="p7c-reaction-popover" role="menu" aria-label="Choose a reaction">
+                            {REACTIONS.map((emoji) => (
+                              <button key={emoji} type="button" onClick={() => { toggleReaction(key, emoji); setReactionPickerId(''); }}>{emoji}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
       </div>
 
-      <div style={{ padding: '0 24px' }}>
-        <TypingIndicator users={(Array.isArray(typingUsers) ? typingUsers : []).filter((user) => user.userId !== currentUserId)} />
-      </div>
+      {newMessageCount > 0 && (
+        <button type="button" className="p7c-new-messages" onClick={scrollToLatest}>
+          <ArrowDown size={15} /> {newMessageCount} new message{newMessageCount > 1 ? 's' : ''}
+        </button>
+      )}
 
       {replyTarget && (
-        <div style={{ margin: '0 24px', padding: '12px', background: 'var(--bg-secondary)', borderLeft: '4px solid var(--accent-primary)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', animation: 'message-in 0.2s ease-out' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-primary)' }}>Replying to {replyTarget.senderName}</div>
-            <div style={{ fontSize: '0.85rem', opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{replyTarget.content}</div>
+        <div className="p7c-reply-context">
+          <div>
+            <strong>Replying to {replyTarget.senderName || 'message'}</strong>
+            <span>{replyTarget.content}</span>
           </div>
-          <button className="btn btn-icon" onClick={() => setReplyTarget(null)}>✕</button>
+          <IconButton label="Cancel reply" onClick={() => setReplyTarget(null)}>x</IconButton>
         </div>
       )}
 
-      <div className="chat-input-area">
+      <div className="p7c-typing-wrap">
+        <TypingIndicator users={(Array.isArray(typingUsers) ? typingUsers : []).filter((typingUser) => typingUser.userId !== currentUserId)} />
+      </div>
+
+      <div className="p7c-chat-input-area">
         <ChatInput
           disabled={!isConnected}
-          onSend={(content) => {
-            const success = onSendMessage(content, replyTarget?.id);
-            if (success) setReplyTarget(null);
-          }}
+          onSend={(content) => sendWithOptimism(content, replyTarget?.id)}
           onTypingChange={onTypingChange}
-          onUpload={onUploadAttachment}
           prefillText={prefillText}
         />
       </div>
 
-      {messageToDelete && (
-        <>
-          <div className="modal-overlay" onClick={() => setMessageToDelete(null)} />
-          <div className="modal-content" style={{ zIndex: 1000, maxWidth: '400px', textAlign: 'center' }}>
-            <h3>Delete this message?</h3>
-            <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-              <button className="btn btn-secondary" onClick={() => setMessageToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleDeleteConfirm}>Delete</button>
-            </div>
-          </div>
-        </>
-      )}
+      <ConfirmationDialog
+        open={Boolean(messageToDelete)}
+        title="Delete this message for you?"
+        message="This removes the message from your chat view. It does not delete it for other participants."
+        confirmLabel="Delete for me"
+        destructive
+        onCancel={() => setMessageToDelete(null)}
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   );
 }

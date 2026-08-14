@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import LocationAutocompleteInput from '../components/LocationAutocompleteInput';
 import { useAuth } from '../context/AuthContext';
 import apiService from '../services/api';
+import BrandLogo from '../components/BrandLogo';
+import AuthHeader from '../components/AuthHeader';
 
 export default function Register() {
   const [step, setStep] = useState(1); // 1=form, 2=otp, 3=done
@@ -67,8 +69,8 @@ export default function Register() {
       setError('Please fill in all required fields.');
       return;
     }
-    if (form.password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters.');
       return;
     }
 
@@ -80,7 +82,7 @@ export default function Register() {
       const normalizedEmail = form.email.trim().toLowerCase();
       const response = await apiService.sendOtp(normalizedEmail);
       setForm((previous) => ({ ...previous, email: normalizedEmail }));
-      setSentOtp(response.data.otp || '');
+      setSentOtp('');
       setInfo(response.data.message || `We sent a 6-digit OTP to ${normalizedEmail}.`);
       setStep(2);
       startResendTimer();
@@ -104,10 +106,9 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await apiService.verifyOtp(form.email, otp);
-      await register(form);
+      await register({ ...form, otp });
       setStep(3);
-      setTimeout(() => navigate('/feed'), 2000);
+      setTimeout(() => navigate('/onboarding', { replace: true }), 1200);
     } catch (err) {
       setError(err.message || 'Verification failed.');
     } finally {
@@ -123,7 +124,7 @@ export default function Register() {
 
     try {
       const response = await apiService.sendOtp(form.email);
-      setSentOtp(response.data.otp || '');
+      setSentOtp('');
       setInfo(response.data.message || `We sent a fresh OTP to ${form.email}.`);
       startResendTimer();
     } catch (err) {
@@ -134,18 +135,23 @@ export default function Register() {
   if (step === 3) {
     return (
       <div className="auth-page animate-in">
-        <div className="auth-card" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '4rem', marginBottom: '16px' }}>OK</div>
-          <h2 style={{ WebkitTextFillColor: 'var(--success)', background: 'none' }}>Account Verified!</h2>
-          <p className="auth-subtitle">Your email has been verified and account is created.<br />Redirecting to Help Feed...</p>
-        </div>
+        <AuthHeader mode="register" />
+        <main className="auth-main">
+          <div className="auth-card" style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '4rem', marginBottom: '16px' }}>OK</div>
+            <h2 style={{ WebkitTextFillColor: 'var(--success)', background: 'none' }}>Account Verified!</h2>
+            <p className="auth-subtitle">Your email has been verified and account is created.<br />Redirecting to onboarding...</p>
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
     <div className="auth-page animate-in">
-      <div className="auth-card">
+      <AuthHeader mode="register" />
+      <main className="auth-main">
+        <div className="auth-card auth-card-register">
         <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '20px' }}>
 
           {[1, 2].map((currentStep) => (
@@ -175,7 +181,8 @@ export default function Register() {
 
         {step === 1 && (
           <>
-            <h2>Join HVHN</h2>
+            <div className="auth-header"><BrandLogo variant="mark" /></div>
+            <h2>Join Sahay</h2>
             <p className="auth-subtitle">Create your account and start helping</p>
 
             {error && (
@@ -215,11 +222,11 @@ export default function Register() {
                   type="password"
                   name="password"
                   className="form-input"
-                  placeholder="Min 6 characters"
+                  placeholder="Min 8 characters"
                   value={form.password}
                   onChange={handleChange}
                   required
-                  minLength={6}
+                  minLength={8}
                 />
               </div>
               <div className="form-group">
@@ -311,7 +318,8 @@ export default function Register() {
             </div>
           </>
         )}
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

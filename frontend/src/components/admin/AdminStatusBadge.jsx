@@ -1,3 +1,5 @@
+import { humanizeEnum } from '../../utils/displayFormat';
+
 const STATUS_VARIANTS = {
   HIGH: 'admin-badge-danger',
   MEDIUM: 'admin-badge-warning',
@@ -22,7 +24,7 @@ export default function AdminStatusBadge({ value, prefix = '' }) {
   return (
     <span className={`admin-badge ${variant}`}>
       {prefix}
-      {String(value || '').replace(/_/g, ' ')}
+      {humanizeEnum(value)}
     </span>
   );
 }

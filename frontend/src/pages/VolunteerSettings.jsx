@@ -1,159 +1,155 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Activity, LocateFixed, Save } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import VolunteerBadgeList from '../components/volunteer/VolunteerBadgeList';
 import { useAuth } from '../context/AuthContext';
 import apiService from '../services/api';
-import { VOLUNTEER_CATEGORY_OPTIONS, VOLUNTEER_SKILL_OPTIONS } from '../utils/volunteer';
-import VerificationBadge from '../components/VerificationBadge';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  SectionHeader,
+  Select,
+  Skeleton,
+  StatCard,
+  Switch,
+} from '../components/ui';
+import { VOLUNTEER_CATEGORY_OPTIONS, normalizeVolunteerCategories } from '../utils/volunteer';
+import { normalizeApiError } from '../utils/errors';
+import { formatLocation } from '../utils/displayFormat';
+
+const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
+function defaultSchedule() {
+  return DAYS.map((day) => ({ day, startTime: '09:00', endTime: '18:00', enabled: false }));
+}
 
 function buildFallbackStats(user) {
-  const totalHelped = user?.totalHelpCount ?? user?.requestsHelped ?? 0;
   return {
-    totalHelped,
+    totalHelped: Number(user?.totalHelpCount ?? user?.requestsHelped ?? 0),
     rating: Number(user?.rating || 0),
-    rank: 0,
-    badges: [...(user?.badges || [])],
+    rank: Number(user?.rank || 0),
+  };
+}
+
+function normalizeForm(user = {}) {
+  return {
+    isVolunteer: Boolean(user.isVolunteer),
+    volunteerStatus: user.volunteerStatus || 'OFFLINE',
+    volunteerCategories: normalizeVolunteerCategories(user.volunteerCategories || []),
+    latitude: user.latitude ?? null,
+    longitude: user.longitude ?? null,
+    locationSource: user.locationSource || 'PROFILE',
+    isAlwaysAvailable: Boolean(user.isAlwaysAvailable),
+    availabilitySchedule: user.availabilitySchedule?.length ? user.availabilitySchedule : defaultSchedule(),
   };
 }
 
 export default function VolunteerSettings() {
   const { user, updateUser } = useAuth();
-  const [form, setForm] = useState({
-    isVolunteer: Boolean(user?.isVolunteer),
-    volunteerStatus: user?.volunteerStatus || 'OFFLINE',
-    volunteerCategories: [...(user?.volunteerCategories || [])],
-    skills: [...(user?.skills || [])],
-    latitude: user?.latitude ?? null,
-    longitude: user?.longitude ?? null,
-    isAlwaysAvailable: user?.isAlwaysAvailable || false,
-    availabilitySchedule: user?.availabilitySchedule?.length ? user.availabilitySchedule : 
-      ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].map(d => ({ day: d, startTime: '09:00', endTime: '18:00', enabled: false }))
-  });
+  const [form, setForm] = useState(normalizeForm(user));
   const [stats, setStats] = useState(buildFallbackStats(user));
   const [saving, setSaving] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(true);
   const [locating, setLocating] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    setForm({
-      isVolunteer: Boolean(user?.isVolunteer),
-      volunteerStatus: user?.volunteerStatus || 'OFFLINE',
-      volunteerCategories: [...(user?.volunteerCategories || [])],
-      skills: [...(user?.skills || [])],
-      latitude: user?.latitude ?? null,
-      longitude: user?.longitude ?? null,
-      isAlwaysAvailable: user?.isAlwaysAvailable || false,
-      availabilitySchedule: user?.availabilitySchedule?.length ? user.availabilitySchedule : 
-        ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].map(d => ({ day: d, startTime: '09:00', endTime: '18:00', enabled: false }))
-    });
-    setStats(buildFallbackStats(user));
+    setForm(normalizeForm(user || {}));
   }, [user]);
 
   useEffect(() => {
-    if (!user?.userId || !user?.isVolunteer) {
-      setStats(buildFallbackStats(user));
-      return;
-    }
-
     let active = true;
-    apiService.getVolunteerStats(user.userId)
-      .then((response) => {
-        if (active) setStats(response.data);
-      })
-      .catch(() => {
+    async function loadStats() {
+      setLoadingStats(true);
+      if (!user?.userId || !user?.isVolunteer) {
+        setStats(buildFallbackStats(user));
+        setLoadingStats(false);
+        return;
+      }
+      try {
+        const response = await apiService.getVolunteerStats(user.userId);
+        if (active) setStats(response.data || buildFallbackStats(user));
+      } catch {
         if (active) setStats(buildFallbackStats(user));
-      });
+      } finally {
+        if (active) setLoadingStats(false);
+      }
+    }
+    loadStats();
+    return () => { active = false; };
+  }, [user?.userId, user?.isVolunteer]);
 
-    return () => {
-      active = false;
-    };
-  }, [user]);
-
-  function showToast(message, type = 'success') {
-    setToast({ message, type });
-    window.clearTimeout(showToast.timeoutId);
-    showToast.timeoutId = window.setTimeout(() => setToast(null), 3200);
-  }
+  const locationSummary = useMemo(() => formatLocation({ ...user, ...form }), [form, user]);
 
   function toggleCategory(category) {
+    if (!form.isVolunteer) return;
     setForm((current) => {
-      const isSelected = (Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []).includes(category);
-      return {
-        ...current,
-        volunteerCategories: isSelected
-          ? (Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []).filter((entry) => entry !== category)
-          : [...(Array.isArray(current.volunteerCategories) ? current.volunteerCategories : []), category],
-      };
+      const selected = new Set(current.volunteerCategories);
+      if (selected.has(category)) selected.delete(category);
+      else selected.add(category);
+      return { ...current, volunteerCategories: Array.from(selected) };
     });
   }
 
-  function toggleSkill(skill) {
+  function updateSchedule(index, patch) {
     setForm((current) => {
-      const isSelected = (Array.isArray(current.skills) ? current.skills : []).includes(skill);
-      return {
-        ...current,
-        skills: isSelected
-          ? (Array.isArray(current.skills) ? current.skills : []).filter((entry) => entry !== skill)
-          : [...(Array.isArray(current.skills) ? current.skills : []), skill],
-      };
+      const next = [...current.availabilitySchedule];
+      next[index] = { ...next[index], ...patch };
+      return { ...current, availabilitySchedule: next };
     });
-  }
-
-  function updateStatus(nextStatus) {
-    setForm((current) => ({ ...current, volunteerStatus: nextStatus }));
   }
 
   function detectLocation() {
     if (!navigator.geolocation) {
-      showToast('Geolocation is not available in this browser.', 'error');
+      setError('This browser does not support current location. Update your profile address manually instead.');
       return;
     }
-
     setLocating(true);
+    setError('');
     navigator.geolocation.getCurrentPosition(
       (position) => {
         setForm((current) => ({
           ...current,
           latitude: Number(position.coords.latitude.toFixed(6)),
           longitude: Number(position.coords.longitude.toFixed(6)),
+          locationSource: 'BROWSER',
         }));
+        setNotice('Current location will be used for volunteer matching after save.');
         setLocating(false);
-        showToast('Volunteer location updated from GPS.');
       },
       () => {
         setLocating(false);
-        showToast('We could not access your location. Check browser permissions and try again.', 'error');
+        setError('Location permission was denied or unavailable.');
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 0,
-      }
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
     );
   }
 
   async function handleSave() {
     if (form.isVolunteer && form.volunteerCategories.length === 0) {
-      showToast('Choose at least one help category before saving volunteer mode.', 'error');
+      setError('Choose at least one help category before enabling volunteer mode.');
       return;
     }
 
     setSaving(true);
+    setError('');
     try {
       let latestUser = user || {};
-
       const toggleResponse = await apiService.toggleVolunteer(user.userId, form.isVolunteer);
       latestUser = { ...latestUser, ...toggleResponse.data };
-      updateUser(latestUser);
 
       if (form.isVolunteer) {
-        const categoriesResponse = await apiService.updateVolunteerCategories(user.userId, form.volunteerCategories);
-        latestUser = { ...latestUser, ...categoriesResponse.data };
-        updateUser(latestUser);
-
-        const statusResponse = await apiService.updateVolunteerAvailability(user.userId, form.volunteerStatus);
-        latestUser = { ...latestUser, ...statusResponse.data };
-        updateUser(latestUser);
+        const [categoryResponse, availabilityResponse] = await Promise.all([
+          apiService.updateVolunteerCategories(user.userId, form.volunteerCategories),
+          apiService.updateVolunteerAvailability(user.userId, form.volunteerStatus),
+        ]);
+        latestUser = { ...latestUser, ...categoryResponse.data, ...availabilityResponse.data };
 
         if (form.latitude != null && form.longitude != null) {
           const locationResponse = await apiService.updateVolunteerLocation(user.userId, {
@@ -161,341 +157,160 @@ export default function VolunteerSettings() {
             longitude: form.longitude,
           });
           latestUser = { ...latestUser, ...locationResponse.data };
-          updateUser(latestUser);
         }
-
-        const skillsResponse = await apiService.updateSkills(form.skills);
-        latestUser = { ...latestUser, ...skillsResponse.data };
-        updateUser(latestUser);
 
         await apiService.updateVolunteerSchedule(user.userId, {
           isAlwaysAvailable: form.isAlwaysAvailable,
-          schedule: form.availabilitySchedule
+          schedule: form.availabilitySchedule,
         });
-        
-        // Refresh local user state
-        const profileRes = await apiService.getProfile(user.userId);
-        latestUser = { ...latestUser, ...profileRes.data };
-        updateUser(latestUser);
 
-        try {
-          const statsResponse = await apiService.getVolunteerStats(user.userId);
-          setStats(statsResponse.data);
-        } catch {
-          setStats(buildFallbackStats(latestUser));
-        }
-      } else {
-        setStats(buildFallbackStats({ ...latestUser, totalHelpCount: 0, badges: [] }));
+        const profileResponse = await apiService.getProfile(user.userId);
+        latestUser = { ...latestUser, ...profileResponse.data };
       }
 
-      showToast(form.isVolunteer ? 'Volunteer settings saved.' : 'Volunteer mode disabled.');
-    } catch (error) {
-      showToast(error.message || 'We could not save your volunteer settings.', 'error');
+      updateUser?.(latestUser);
+      setNotice(form.isVolunteer ? 'Volunteer settings saved.' : 'Volunteer mode disabled.');
+    } catch (saveError) {
+      setError(normalizeApiError(saveError, 'We could not save volunteer settings.').message);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="animate-in volunteer-page-shell">
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.message}</div>}
+    <div className="animate-in p7d-page">
+      <PageHeader
+        eyebrow="Volunteer"
+        title="Volunteer settings"
+        description="Control when and how you appear for nearby verified help requests."
+        action={user?.isVolunteer && <Button to="/volunteer/dashboard" variant="secondary"><Activity size={16} /> Open dashboard</Button>}
+      />
 
-      <div className="page-header">
-        <div>
-          <h1>Volunteer Settings</h1>
-          <p className="volunteer-page-subtitle">
-            Turn volunteer mode on, choose your response categories, and keep your live location ready for nearby alerts.
-          </p>
-        </div>
-        {user?.isVolunteer && (
-          <Link to="/volunteer/dashboard" className="btn btn-secondary">
-            Open Dashboard
-          </Link>
-        )}
-      </div>
+      {error && <ErrorState message={error} />}
+      {notice && <Alert variant="success" title="Volunteer settings">{notice}</Alert>}
 
-      <div className="volunteer-settings-grid">
-        <div className="card">
-          <div className="volunteer-panel-header">
-            <div>
-              <h3>Volunteer Mode</h3>
-              <p>Only verified members can appear for nearby requests.</p>
-            </div>
-            <button
-              type="button"
-              className={`volunteer-toggle ${form.isVolunteer ? 'active' : ''}`}
-              onClick={() => setForm((current) => ({ ...current, isVolunteer: !current.isVolunteer }))}
-              aria-pressed={form.isVolunteer}
-            >
-              <span />
-            </button>
+      <div className="p7d-two-column p7d-two-column--wide p7d-volunteer-layout">
+        <Card className="p7d-volunteer-primary">
+          <SectionHeader title="Volunteer mode" description="Choose when you are available to help." />
+          <Switch
+            label={form.isVolunteer ? 'Volunteer mode on' : 'Volunteer mode off'}
+            checked={form.isVolunteer}
+            onChange={() => setForm((current) => ({
+              ...current,
+              isVolunteer: !current.isVolunteer,
+              volunteerStatus: !current.isVolunteer ? 'ONLINE' : 'OFFLINE',
+            }))}
+            description="Turn on to receive nearby requests that match your categories and location."
+          />
+
+          <div className="p7d-form-grid">
+            <label className="ui-field">
+              <span>Availability status</span>
+              <Select
+                value={form.volunteerStatus}
+                disabled={!form.isVolunteer}
+                onChange={(event) => setForm((current) => ({ ...current, volunteerStatus: event.target.value }))}
+              >
+                <option value="ONLINE">Online</option>
+                <option value="OFFLINE">Offline</option>
+              </Select>
+            </label>
           </div>
 
-          {form.isVolunteer ? (
-            <div className="volunteer-settings-section">
-              <div className="volunteer-status-row">
+          <SectionHeader title="Help categories" description="Choose the types of requests you can help with." />
+          <div className={`p7d-category-grid ${!form.isVolunteer ? 'is-disabled' : ''}`}>
+            {VOLUNTEER_CATEGORY_OPTIONS.map((category) => {
+              const selected = form.volunteerCategories.includes(category.value);
+              return (
                 <button
+                  key={category.value}
                   type="button"
-                  className={`btn ${form.volunteerStatus === 'ONLINE' ? 'btn-success' : 'btn-secondary'}`}
-                  onClick={() => updateStatus('ONLINE')}
+                  className={`p7d-category-card ${selected ? 'is-selected' : ''}`}
+                  disabled={!form.isVolunteer}
+                  onClick={() => toggleCategory(category.value)}
+                  aria-pressed={selected}
                 >
-                  Online
+                  <span>{category.icon}</span>
+                  <strong>{category.label}</strong>
                 </button>
-                <button
-                  type="button"
-                  className={`btn ${form.volunteerStatus === 'OFFLINE' ? 'btn-danger' : 'btn-secondary'}`}
-                  onClick={() => updateStatus('OFFLINE')}
-                >
-                  Offline
-                </button>
-              </div>
+              );
+            })}
+          </div>
 
-              <div className="volunteer-settings-section">
-                <div className="volunteer-section-label">Help Categories</div>
-                <div className="volunteer-category-grid">
-                  {VOLUNTEER_CATEGORY_OPTIONS.map((category) => {
-                    const active = (Array.isArray(form.volunteerCategories) ? form.volunteerCategories : []).includes(category.value);
-                    return (
-                      <button
-                        key={category.value}
-                        type="button"
-                        className={`volunteer-category-card ${active ? 'active' : ''}`}
-                        onClick={() => toggleCategory(category.value)}
-                      >
-                        <span className="volunteer-category-icon" aria-hidden="true">{category.icon}</span>
-                        <span>{category.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="volunteer-settings-section">
-                <div className="volunteer-section-label">My Skills & Expertise</div>
-                <p className="text-sm text-gray-500 mb-3">Select specialized skills to be matched with high-priority requests.</p>
-                <div className="flex flex-wrap gap-2">
-                  {VOLUNTEER_SKILL_OPTIONS.map((skill) => {
-                    const active = (Array.isArray(form.skills) ? form.skills : []).includes(skill.value);
-                    return (
-                      <button
-                        key={skill.value}
-                        type="button"
-                        onClick={() => toggleSkill(skill.value)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-200 ${
-                          active 
-                            ? 'bg-green-100 border-green-300 text-green-700 shadow-sm font-medium' 
-                            : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
-                        }`}
-                      >
-                        <span className="text-lg">{skill.icon}</span>
-                        <span className="text-sm">{skill.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="volunteer-settings-section">
-                <div className="volunteer-section-label">Live Location</div>
-                <div className="volunteer-location-box">
-                  <div>
-                    {form.latitude != null && form.longitude != null ? (
-                      <span>
-                        {form.latitude}, {form.longitude}
-                      </span>
-                    ) : (
-                      <span>No GPS location saved yet</span>
-                    )}
-                  </div>
-                  <button type="button" className="btn btn-secondary" onClick={detectLocation} disabled={locating}>
-                    {locating ? 'Locating...' : 'Update Location'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Availability Scheduler */}
-              <div className="volunteer-settings-section border-t pt-6 mt-6">
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <div className="volunteer-section-label">Availability Schedule</div>
-                    <p className="text-sm text-gray-500">Automate your online status based on time of day.</p>
-                  </div>
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <span className="text-sm font-bold text-gray-700 group-hover:text-green-600 transition-colors">Always Available</span>
-                    <div 
-                      className={`w-12 h-6 rounded-full relative transition-colors duration-300 ${form.isAlwaysAvailable ? 'bg-green-500' : 'bg-gray-300'}`}
-                      onClick={() => setForm(f => ({ ...f, isAlwaysAvailable: !f.isAlwaysAvailable }))}
-                    >
-                      <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform duration-300 ${form.isAlwaysAvailable ? 'translate-x-6' : ''}`} />
-                    </div>
-                  </label>
-                </div>
-
-                {!form.isAlwaysAvailable ? (
-                  <div className="space-y-3">
-                    {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : []).map((entry, idx) => (
-                      <div key={entry.day} className={`flex items-center gap-4 p-3 rounded-xl border transition-all ${entry.enabled ? 'bg-green-50/50 border-green-200' : 'bg-gray-50/50 border-gray-100 opacity-60'}`}>
-                        <div className="w-12 font-black text-gray-400 text-xs">{entry.day}</div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newSched = [...form.availabilitySchedule];
-                            newSched[idx].enabled = !newSched[idx].enabled;
-                            setForm(f => ({ ...f, availabilitySchedule: newSched }));
-                          }}
-                          className={`w-10 h-5 rounded-full relative flex-shrink-0 transition-colors ${entry.enabled ? 'bg-green-500' : 'bg-gray-300'}`}
-                        >
-                          <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${entry.enabled ? 'translate-x-5' : ''}`} />
-                        </button>
-                        
-                        <div className="flex-1 flex items-center gap-2">
-                          <select
-                            disabled={!entry.enabled}
-                            value={entry.startTime}
-                            onChange={(e) => {
-                              const newSched = [...form.availabilitySchedule];
-                              newSched[idx].startTime = e.target.value;
-                              setForm(f => ({ ...f, availabilitySchedule: newSched }));
-                            }}
-                            className="bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-green-500"
-                          >
-                            {Array.from({length: 48}).map((_, i) => {
-                              const h = Math.floor(i/2);
-                              const m = i%2 === 0 ? '00' : '30';
-                              const val = `${String(h).padStart(2, '0')}:${m}`;
-                              return <option key={val} value={val}>{val}</option>;
-                            })}
-                          </select>
-                          <span className="text-gray-400 text-xs">to</span>
-                          <select
-                            disabled={!entry.enabled}
-                            value={entry.endTime}
-                            onChange={(e) => {
-                              const newSched = [...form.availabilitySchedule];
-                              newSched[idx].endTime = e.target.value;
-                              setForm(f => ({ ...f, availabilitySchedule: newSched }));
-                            }}
-                            className="bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-green-500"
-                          >
-                            {Array.from({length: 49}).map((_, i) => {
-                              const h = Math.floor(i/2);
-                              const m = i%2 === 0 ? '00' : '30';
-                              const val = h === 24 ? '23:59' : `${String(h).padStart(2, '0')}:${m}`;
-                              if (h === 24 && i%2 !== 0) return null;
-                              return <option key={val} value={val}>{val}</option>;
-                            })}
-                          </select>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="mt-4 p-4 bg-blue-50 rounded-2xl border border-blue-100 text-blue-800 text-sm">
-                      <div className="font-bold mb-1 flex items-center gap-2">
-                        <span>🗓️</span> Schedule Summary
-                      </div>
-                      {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : []).some(e => e.enabled) ? (
-                        <p>
-                          Auto-ONLINE: {(Array.isArray(form.availabilitySchedule) ? form.availabilitySchedule : [])
-                            .filter(e => e?.enabled)
-                            .map(e => `${e.day} (${e.startTime}-${e.endTime})`)
-                            .join(', ')}
-                        </p>
-                      ) : (
-                        <p>No active schedule. You'll remain in your last selected state.</p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-8 text-center bg-green-50 rounded-2xl border border-green-100">
-                    <div className="text-4xl mb-3">🟢</div>
-                    <div className="font-bold text-green-800">Always Available Mode Active</div>
-                    <p className="text-sm text-green-700/70 mt-1">
-                      You will appear ONLINE at all times. The weekly schedule is ignored.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="volunteer-empty-inline">
-              Enable volunteer mode to receive nearby requests and appear on the responder network.
-            </div>
+          {!form.isVolunteer && (
+            <EmptyState title="Volunteer mode is off" message="Categories and availability are disabled until volunteer mode is enabled." />
           )}
 
-          <div className="volunteer-actions-row">
-            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving...' : 'Save Settings'}
-            </button>
+          <SectionHeader title="Location relevance" description="Use your profile area for better nearby matching." />
+          <div className="p7d-location-panel">
+            <div>
+              <strong>{locationSummary}</strong>
+              <p>Source: {form.locationSource.replace(/_/g, ' ')}</p>
+            </div>
+            <Button type="button" variant="secondary" loading={locating} onClick={detectLocation} disabled={!form.isVolunteer}>
+              <LocateFixed size={16} /> Use current location
+            </Button>
           </div>
-        </div>
+          <p className="p7d-muted">For manual address changes, update your profile location.</p>
+          <Button to="/profile/edit" variant="secondary" size="sm">Edit profile location</Button>
+        </Card>
 
-        <div className="card volunteer-stats-card">
-          <h3>Volunteer Snapshot</h3>
-          <div className="profile-stats volunteer-stats-grid">
-            <div className="stat-card">
-              <div className="stat-value">{stats.totalHelped || 0}</div>
-              <div className="stat-label">Total Helped</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">★ {(stats.rating || 0).toFixed(1)}</div>
-              <div className="stat-label">Rating</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{stats.rank || '--'}</div>
-              <div className="stat-label">Volunteer Rank</div>
-            </div>
-          </div>
+        <div className="p7d-volunteer-side">
+          <Card className="p7d-volunteer-snapshot">
+            <SectionHeader title="Volunteer snapshot" description="Your volunteering activity." />
+            {loadingStats ? <Skeleton lines={4} /> : (
+              <>
+                <div className="p7d-stat-grid p7d-stat-grid--compact">
+                  <StatCard label="Total helped" value={stats.totalHelped || 0} />
+                  <StatCard label="Rating" value={stats.rating ? stats.rating.toFixed(1) : 'New'} />
+                  <StatCard label="Rank" value={stats.rank || 'Unranked'} />
+                </div>
+                <SectionHeader title="Badges" />
+                <VolunteerBadgeList totalHelpCount={stats.totalHelped || 0} emptyMessage="Your first completed help unlocks Helper." />
+              </>
+            )}
+          </Card>
 
-          <div className="volunteer-settings-section">
-            <div className="volunteer-section-label">Badges</div>
-            <VolunteerBadgeList totalHelpCount={stats.totalHelped || 0} emptyMessage="Your first completed help unlocks Helper." />
-          </div>
-        </div>
+          <Card className="p7d-volunteer-schedule">
+            <SectionHeader title="Availability schedule" description="Set weekly times for when you can help." />
+            <Switch
+              label="Always available"
+              checked={form.isAlwaysAvailable}
+              disabled={!form.isVolunteer}
+              onChange={() => setForm((current) => ({ ...current, isAlwaysAvailable: !current.isAlwaysAvailable }))}
+              description="When enabled, weekly schedule entries are ignored."
+            />
 
-        {/* Identity Trust Guide */}
-        <div className="card md:col-span-2 border-none shadow-md bg-white">
-          <div className="p-1">
-            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              🛡️ How to Level Up Your Trust
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 relative">
-                <div className="flex items-center gap-2 mb-2">
-                  <VerificationBadge level="BASIC" />
-                  <span className="font-bold text-slate-700">Basic</span>
-                </div>
-                <p className="text-xs text-slate-500 leading-relaxed">Auto-assigned upon email verification. Access to feed and basic community features.</p>
-                {user?.verificationLevel === 'BASIC' && (
-                  <div className="mt-3 text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Current Level</div>
-                )}
+            {!form.isAlwaysAvailable && (
+              <div className="p7d-schedule-list">
+                {form.availabilitySchedule.map((entry, index) => (
+                  <div key={entry.day} className="p7d-schedule-row">
+                    <Switch
+                      label={entry.day}
+                      checked={Boolean(entry.enabled)}
+                      disabled={!form.isVolunteer}
+                      onChange={() => updateSchedule(index, { enabled: !entry.enabled })}
+                    />
+                    <Select value={entry.startTime} disabled={!form.isVolunteer || !entry.enabled} onChange={(event) => updateSchedule(index, { startTime: event.target.value })}>
+                      {Array.from({ length: 24 }).map((_, hour) => <option key={hour} value={`${String(hour).padStart(2, '0')}:00`}>{String(hour).padStart(2, '0')}:00</option>)}
+                    </Select>
+                    <Select value={entry.endTime} disabled={!form.isVolunteer || !entry.enabled} onChange={(event) => updateSchedule(index, { endTime: event.target.value })}>
+                      {Array.from({ length: 24 }).map((_, hour) => <option key={hour} value={`${String(hour).padStart(2, '0')}:00`}>{String(hour).padStart(2, '0')}:00</option>)}
+                    </Select>
+                  </div>
+                ))}
               </div>
-              <div className={`p-4 rounded-2xl border relative ${user?.verificationLevel === 'VERIFIED' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100'}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <VerificationBadge level="VERIFIED" />
-                  <span className="font-bold text-blue-700">Verified</span>
-                </div>
-                <p className="text-xs text-blue-600 leading-relaxed">Join a community using your institution email (e.g., .edu, .ac.in) or a valid join code.</p>
-                {user?.verificationLevel === 'VERIFIED' && (
-                  <div className="mt-3 text-[10px] font-bold text-blue-500 uppercase tracking-tighter">Current Level</div>
-                )}
-                {user?.verificationLevel === 'BASIC' && (
-                  <Link to="/communities" className="mt-3 inline-block text-[10px] font-bold text-blue-600 hover:underline uppercase tracking-tighter">Explore Communities →</Link>
-                )}
-              </div>
-              <div className={`p-4 rounded-2xl border relative ${user?.verificationLevel === 'TRUSTED' ? 'bg-emerald-50 border-emerald-200 shadow-sm' : 'bg-white border-gray-100'}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <VerificationBadge level="TRUSTED" />
-                  <span className="font-bold text-emerald-700">Trusted</span>
-                </div>
-                <p className="text-xs text-emerald-600 leading-relaxed">Assigned manually by administrators for consistent high-impact contributions and verified history.</p>
-                {user?.verificationLevel === 'TRUSTED' && (
-                  <div className="mt-3 text-[10px] font-bold text-emerald-500 uppercase tracking-tighter">Current Level</div>
-                )}
-                {user?.verificationLevel === 'VERIFIED' && (
-                  <div className="mt-3 text-[10px] font-bold text-emerald-400 uppercase tracking-tighter">Eligible for Review</div>
-                )}
-              </div>
+            )}
+            {form.isAlwaysAvailable && <Badge variant="success">Always available</Badge>}
+          </Card>
+
+          <Card className="p7d-volunteer-actions-card">
+            <SectionHeader title="Actions" description="Save changes or return to app settings." />
+            <div className="p7d-volunteer-actions">
+              <Button as={Link} to="/settings" variant="secondary">Back to settings</Button>
+              <Button type="button" loading={saving} onClick={handleSave}><Save size={16} /> Save volunteer settings</Button>
             </div>
-          </div>
+          </Card>
         </div>
       </div>
     </div>

@@ -1,46 +1,50 @@
-// FEATURE: Global Chats (Phase 6 Expansion)
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, BellOff, EyeOff, MessageSquare, MoreHorizontal, RefreshCcw, Search, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import apiService from '../services/api';
 import ChatWindow from '../components/chat/ChatWindow';
 import OnlineStatus from '../components/chat/OnlineStatus';
 import UnreadBadge from '../components/chat/UnreadBadge';
 import useChatSocket from '../hooks/useChatSocket';
+import { Avatar, Badge, Button, ConfirmationDialog, DropdownMenu, EmptyState, IconButton, Input, PageHeader, Skeleton } from '../components/ui';
 import { matchesCurrentUser } from '../utils/communityHub';
-import messagingImage from '../assets/messages.png';
-import searchImage from '../assets/search.png';
-
-
-function samePerson(left, right) {
-  if (!left || !right) return false;
-  const leftId = String(left.userId || left.id || '');
-  const rightId = String(right.userId || right.id || '');
-  return (
-    (leftId && rightId && leftId === rightId) ||
-    (left.email && right.email && String(left.email).toLowerCase() === String(right.email).toLowerCase())
-  );
-}
+import { getStoredToken } from '../utils/sessionStorage';
+import { timeAgo } from '../utils/timeUtils';
 
 function upsertRoom(existingRooms, nextRoom) {
   const roomIndex = existingRooms.findIndex((room) => room.id === nextRoom.id);
   if (roomIndex === -1) return [nextRoom, ...existingRooms];
   const nextRooms = [...existingRooms];
-  nextRooms[roomIndex] = nextRoom;
-  return nextRooms;
+  nextRooms[roomIndex] = { ...nextRooms[roomIndex], ...nextRoom };
+  return nextRooms.sort((left, right) => new Date(right.lastActivityAt || right.updatedAt || 0) - new Date(left.lastActivityAt || left.updatedAt || 0));
+}
+
+function getRoomPeer(room, user) {
+  if (room?.type !== 'DIRECT') return null;
+  return (room.participants || []).find((participant) => !matchesCurrentUser(participant, user)) || null;
+}
+
+function getRoomTitle(room, user) {
+  const peer = getRoomPeer(room, user);
+  return peer?.fullName || peer?.name || room?.name || 'Conversation';
+}
+
+function getLastMessage(room) {
+  return room?.lastMessage?.content || room?.lastMessageText || room?.lastMessage || 'No messages yet';
 }
 
 export default function Chats() {
   const { user } = useAuth();
   const [chatRooms, setChatRooms] = useState([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
+  const [roomsError, setRoomsError] = useState('');
   const [activeRoomId, setActiveRoomId] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
   const [sidebarSearch, setSidebarSearch] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const [roomToDelete, setRoomToDelete] = useState(null);
-  const [showMenu, setShowMenu] = useState(false);
+  const [roomToHide, setRoomToHide] = useState(null);
+  const [showMobileChat, setShowMobileChat] = useState(false);
 
-  const token = user?.token || window.localStorage.getItem('hvhn_token') || '';
+  const token = user?.token || getStoredToken();
   const {
     messages: liveMessages,
     sendMessage,
@@ -52,6 +56,23 @@ export default function Chats() {
     connectionStatus,
   } = useChatSocket(activeRoomId, token);
 
+  async function loadRooms({ preserveActive = false } = {}) {
+    setLoadingRooms(true);
+    setRoomsError('');
+    try {
+      const response = await apiService.getChatRooms();
+      const nextRooms = response.data || [];
+      setChatRooms(nextRooms);
+      if (!preserveActive && nextRooms.length > 0 && !activeRoomId) {
+        setActiveRoomId(nextRooms[0].id);
+      }
+    } catch {
+      setRoomsError('We could not load your conversations.');
+    } finally {
+      setLoadingRooms(false);
+    }
+  }
+
   useEffect(() => {
     loadRooms();
   }, [user?.userId]);
@@ -59,47 +80,36 @@ export default function Chats() {
   useEffect(() => {
     const nextRoomList = Object.values(roomUpdates || {});
     if (!nextRoomList.length) return;
-    setChatRooms((current) => {
-      const roomsArray = Array.isArray(current) ? current : [];
-      return nextRoomList.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), roomsArray);
-    });
+    setChatRooms((current) => nextRoomList.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), Array.isArray(current) ? current : []));
   }, [roomUpdates]);
 
-  const loadRooms = async () => {
-    setLoadingRooms(true);
-    try {
-      const response = await apiService.getChatRooms();
-      setChatRooms(response.data || []);
-      if ((response.data || []).length > 0 && !activeRoomId) {
-        setActiveRoomId(response.data[0].id);
-      }
-    } catch {
-      // Fallback
-    } finally {
-      setLoadingRooms(false);
-    }
-  };
-
-  // Sidebar Deduplication: Ensure unique participants in direct chats
-  const uniqueRooms = (() => {
+  const uniqueRooms = useMemo(() => {
     const seen = new Set();
-    const rooms = Array.isArray(chatRooms) ? chatRooms : [];
-    return rooms.filter(room => {
+    return (Array.isArray(chatRooms) ? chatRooms : []).filter((room) => {
       if (room.type === 'GROUP') return true;
-      const other = room.participants?.find(p => !matchesCurrentUser(p, user));
-      if (!other) return true; // Keep if no "other" participant found (e.g. self-chat or system)
-      const key = other.userId || other.id || other.email;
-      if (seen.has(key)) return false;
+      const peer = getRoomPeer(room, user);
+      if (!peer) return true;
+      const key = peer.userId || peer.id || peer.email;
+      if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  })();
+  }, [chatRooms, user]);
 
-  const activeRoom = (Array.isArray(chatRooms) ? chatRooms : []).find(r => r.id === activeRoomId) || null;
-  const activeRoomParticipants = activeRoom?.participants || [];
-  const activeDirectParticipant = activeRoom?.type === 'DIRECT'
-    ? (Array.isArray(activeRoomParticipants) ? activeRoomParticipants : []).find((participant) => !matchesCurrentUser(participant, user)) || null
-    : null;
+  const filteredRooms = useMemo(() => {
+    const query = sidebarSearch.trim().toLowerCase();
+    return uniqueRooms.filter((room) => {
+      if (unreadOnly && (room.unreadCount || 0) === 0) return false;
+      if (!query) return true;
+      return `${getRoomTitle(room, user)} ${getLastMessage(room)}`.toLowerCase().includes(query);
+    });
+  }, [sidebarSearch, uniqueRooms, unreadOnly, user]);
+
+  const activeRoom = (Array.isArray(chatRooms) ? chatRooms : []).find((room) => room.id === activeRoomId) || null;
+  const activePeer = getRoomPeer(activeRoom, user);
+  const activePresence = activePeer ? onlineUsers[activePeer.userId || activePeer.id] || activePeer : null;
+  const visibleTypingUsers = (typingUsers || []).filter((typingUser) => typingUser.userId !== (user?.userId || user?.id));
+  const activeTitle = activeRoom ? getRoomTitle(activeRoom, user) : '';
 
   async function handleMessagesRead(messageId) {
     if (!activeRoomId || !messageId) return;
@@ -108,211 +118,191 @@ export default function Chats() {
       setChatRooms((current) => (Array.isArray(current) ? current : []).map((room) => (
         room.id === activeRoomId ? { ...room, unreadCount: 0 } : room
       )));
-    } catch {}
-  }
-
-  function handleSendMessage(content, replyToId) {
-    return sendMessage(content, 'CHAT', replyToId);
-  }
-
-  async function handleUploadAttachment(file) {
-    try {
-      const response = await apiService.uploadChatAttachment(file);
-      const { url, fileName, contentType } = response.data;
-      const attachmentMessage = `attachment:${url}|${fileName}|${contentType || ''}`;
-      sendMessage(attachmentMessage);
-    } catch {}
-  }
-
-  const filteredRooms = uniqueRooms.filter(room => {
-    if (unreadOnly && (room.unreadCount || 0) === 0) return false;
-    if (sidebarSearch.trim()) {
-      return room.name?.toLowerCase().includes(sidebarSearch.trim().toLowerCase());
+    } catch {
+      // Keep read receipts best-effort; the server remains authoritative on refresh.
     }
-    return true;
-  });
+  }
 
-  const handleDeleteRoomConfirm = async () => {
-    if (!roomToDelete) return;
+  function handleSendMessage(content, replyToId, clientMessageId) {
+    return sendMessage(content, 'CHAT', replyToId, clientMessageId);
+  }
+
+  async function handleHideConfirm() {
+    if (!roomToHide) return;
     try {
-      await apiService.deleteChatRoom(roomToDelete);
-      setChatRooms(prev => (Array.isArray(prev) ? prev : []).filter(r => r.id !== roomToDelete));
-      if (activeRoomId === roomToDelete) setActiveRoomId(null);
-    } catch (err) {
-      console.error("Failed to delete", err);
+      await apiService.hideChatConversation(roomToHide);
+      setChatRooms((current) => (Array.isArray(current) ? current : []).filter((room) => room.id !== roomToHide));
+      if (activeRoomId === roomToHide) {
+        setActiveRoomId(null);
+        setShowMobileChat(false);
+      }
     } finally {
-      setRoomToDelete(null);
+      setRoomToHide(null);
     }
-  };
+  }
+
+  function selectRoom(roomId) {
+    setActiveRoomId(roomId);
+    setShowMobileChat(true);
+  }
+
+  const connectionLabel = !navigator.onLine ? 'Offline' : connectionStatus === 'reconnecting' ? 'Reconnecting' : isConnected ? 'Connected' : 'Connecting';
 
   return (
-    <div className="animate-in" style={{ height: 'calc(100vh - 80px)' }}>
-      <div className="chat-layout-container">
-        <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-          {/* Sidebar */}
-          <div className="chat-room-sidebar">
-            <div style={{ padding: '24px', borderBottom: '1px solid var(--border)' }}>
-              <h2 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '20px' }}>💬 Chats</h2>
-              <div className="search-box" style={{ position: 'relative', marginBottom: '16px' }}>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  placeholder="Search..." 
-                  value={sidebarSearch}
-                  onChange={e => setSidebarSearch(e.target.value)}
-                  style={{ paddingLeft: '32px', borderRadius: '12px', background: 'var(--bg-secondary)', border: 'none' }}
-                />
-                <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>🔍</span>
-              </div>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button 
-                  onClick={() => setUnreadOnly(!unreadOnly)}
-                  className={`btn btn-sm ${unreadOnly ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ borderRadius: '20px', fontSize: '0.75rem', padding: '4px 12px' }}
-                >
-                  Unread {unreadOnly && '✓'}
-                </button>
-              </div>
-            </div>
+    <div className="p7c-messages">
+      <PageHeader
+        eyebrow="Messaging"
+        title="Messages"
+        description="Direct and community conversations with live presence, receipts, typing, and reactions."
+      />
 
-            <div className="chat-room-list" style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-              {loadingRooms ? (
-                <div style={{ padding: '40px', textAlign: 'center' }}><div className="spinner" /></div>
-              ) : filteredRooms.length === 0 ? (
-                <div style={{ padding: '40px', textAlign: 'center', opacity: 0.6 }}>
-                  <img src={searchImage} alt="" style={{ width: '80px', height: '80px', margin: '0 auto 16px', opacity: 0.8 }} />
-                  <p style={{ fontSize: '0.85rem', fontWeight: 600 }}>No conversations</p>
-                </div>
-
-              ) : (
-                filteredRooms.map((room) => {
-                  const other = room.participants?.find((p) => !matchesCurrentUser(p, user));
-                  const presence = other ? onlineUsers[other.userId || other.id] || other : null;
-                  return (
-                    <button
-                      key={room.id}
-                      className={`chat-room-item ${activeRoomId === room.id ? 'active' : ''}`}
-                      onClick={() => setActiveRoomId(room.id)}
-                      style={{ width: '100%', marginBottom: '2px', textAlign: 'left', borderRadius: '12px', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', background: activeRoomId === room.id ? 'var(--accent-primary-alpha)' : 'transparent', border: 'none', transition: 'all 0.2s' }}
-                    >
-                      <div style={{ position: 'relative' }}>
-                        <div className="profile-avatar" style={{ width: '48px', height: '48px', fontSize: '1.2rem', margin: 0 }}>
-                          {room.name?.charAt(0)}
-                        </div>
-                        {presence && <div style={{ position: 'absolute', bottom: '2px', right: '2px' }}><OnlineStatus presence={presence} compact /></div>}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                          <strong style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>{room.name}</strong>
-                          {room.unreadCount > 0 && <UnreadBadge count={room.unreadCount} />}
-                        </div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: room.unreadCount > 0 ? 600 : 400 }}>
-                          {room.lastMessage || 'No messages'}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
+      <section className={`p7c-chat-shell ${showMobileChat ? 'is-chat-open' : ''}`} aria-label="Messaging workspace">
+        <aside className="p7c-conversation-panel" aria-label="Conversation list">
+          <div className="p7c-panel-header">
+            <div>
+              <h2>Conversations</h2>
+              <p>{connectionLabel}</p>
             </div>
+            {connectionStatus === 'reconnecting' && <Badge variant="warning">Reconnecting</Badge>}
           </div>
 
-          {/* Main Content */}
-          <div className="chat-content-area">
-            {activeRoomId && activeRoom ? (
-              <>
-                <div className="chat-main-header">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div className="profile-avatar" style={{ width: '42px', height: '42px', margin: 0 }}>
-                      {activeRoom.name?.charAt(0)}
-                    </div>
-                    <div>
-                      <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>{activeRoom.name}</h3>
-                      <div className="community-chat-meta">
-                        {activeDirectParticipant ? (
-                          <OnlineStatus presence={onlineUsers[activeDirectParticipant.userId || activeDirectParticipant.id] || activeDirectParticipant} />
-                        ) : (
-                          <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Community Group</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        placeholder="Search messages..." 
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                        className="form-input"
-                        style={{ height: '36px', width: '180px', fontSize: '0.85rem', borderRadius: '18px', paddingLeft: '32px', background: 'var(--bg-secondary)', border: 'none' }}
-                      />
-                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', opacity: 0.4, fontSize: '0.8rem' }}>🔍</span>
-                    </div>
-
-                    <div style={{ position: 'relative' }}>
-                      <button 
-                        className="btn btn-icon" 
-                        onClick={() => setShowMenu(!showMenu)}
-                        style={{ fontSize: '1.2rem', padding: '4px', background: 'none' }}
-                      >
-                        ⋮
-                      </button>
-                      {showMenu && (
-                        <>
-                          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowMenu(false)} />
-                          <div className="card" style={{ position: 'absolute', top: '100%', right: 0, zIndex: 100, width: '180px', padding: '8px', marginTop: '8px', boxShadow: 'var(--shadow-lg)' }}>
-                            <button className="btn-menu-item" onClick={() => { /* Mute logic */ setShowMenu(false); }}>🔔 Mute Chat</button>
-                            <button className="btn-menu-item danger" onClick={() => { setRoomToDelete(activeRoom.id); setShowMenu(false); }}>🗑️ Delete Chat</button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                
-                <ChatWindow
-                  room={activeRoom}
-                  currentUserId={user?.userId || user?.id}
-                  liveMessages={liveMessages}
-                  typingUsers={typingUsers}
-                  isConnected={isConnected}
-                  connectionStatus={connectionStatus}
-                  onSendMessage={handleSendMessage}
-                  onTypingChange={sendTyping}
-                  onUploadAttachment={handleUploadAttachment}
-                  onMessagesRead={handleMessagesRead}
-                  onDeleteMessage={apiService.deleteChatMessage}
-                  searchQuery={searchQuery}
-                />
-              </>
-            ) : (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-card)', padding: '40px', textAlign: 'center' }}>
-                <img src={messagingImage} alt="" className="chat-welcome-image animate-in fade-in zoom-in slide-in-from-bottom-4 duration-700" />
-                <h2 style={{ fontSize: '1.8rem', fontWeight: 900, marginBottom: '12px' }}>Hyperlocal Messaging</h2>
-                <p style={{ color: 'var(--text-secondary)', maxWidth: '360px', fontSize: '1.05rem', lineHeight: 1.5 }}>Select a conversation from the sidebar to connect with members of your verified network securely.</p>
-              </div>
-
+          <div className="p7c-search">
+            <Search size={17} aria-hidden="true" />
+            <Input
+              type="search"
+              aria-label="Search conversations"
+              placeholder="Search conversations"
+              value={sidebarSearch}
+              onChange={(event) => setSidebarSearch(event.target.value)}
+            />
+            {sidebarSearch && (
+              <IconButton label="Clear conversation search" onClick={() => setSidebarSearch('')}>
+                <X size={16} />
+              </IconButton>
             )}
           </div>
-        </div>
-      </div>
 
-      {roomToDelete && (
-        <>
-          <div className="modal-overlay" onClick={() => setRoomToDelete(null)} />
-          <div className="modal-content" style={{ zIndex: 1000, maxWidth: '400px', textAlign: 'center' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '16px' }}>🗑️</div>
-            <h3>Delete Conversation?</h3>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>This will permanently remove the chat for you. Continue?</p>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-              <button className="btn btn-secondary" onClick={() => setRoomToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleDeleteRoomConfirm}>Confirm</button>
-            </div>
+          <div className="p7c-filter-row" role="group" aria-label="Conversation filters">
+            <button type="button" className={!unreadOnly ? 'is-active' : ''} onClick={() => setUnreadOnly(false)}>All</button>
+            <button type="button" className={unreadOnly ? 'is-active' : ''} onClick={() => setUnreadOnly(true)}>Unread</button>
           </div>
-        </>
-      )}
+
+          <div className="p7c-conversation-list" role="list">
+            {loadingRooms ? (
+              Array.from({ length: 5 }).map((_, index) => (
+                <div key={index} className="p7c-room-skeleton"><Skeleton lines={2} /></div>
+              ))
+            ) : roomsError ? (
+              <div className="p7c-room-error">
+                <p>{roomsError}</p>
+                <Button type="button" variant="secondary" size="sm" onClick={() => loadRooms({ preserveActive: true })}>
+                  <RefreshCcw size={15} /> Retry
+                </Button>
+              </div>
+            ) : filteredRooms.length === 0 ? (
+              <EmptyState
+                title={sidebarSearch || unreadOnly ? 'No matching conversations' : 'No conversations yet'}
+                message={sidebarSearch || unreadOnly ? 'Clear filters to see every conversation.' : 'Open a community member or request thread to start a direct conversation.'}
+                actionLabel={sidebarSearch || unreadOnly ? 'Show all' : undefined}
+                onAction={() => { setSidebarSearch(''); setUnreadOnly(false); }}
+              />
+            ) : (
+              filteredRooms.map((room) => {
+                const peer = getRoomPeer(room, user);
+                const title = getRoomTitle(room, user);
+                const presence = peer ? onlineUsers[peer.userId || peer.id] || peer : null;
+                const roomTyping = visibleTypingUsers.find((typingUser) => typingUser.roomId === room.id);
+                const unread = room.unreadCount || 0;
+                return (
+                  <button
+                    key={room.id}
+                    type="button"
+                    role="listitem"
+                    className={`p7c-conversation-row ${activeRoomId === room.id ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`}
+                    aria-current={activeRoomId === room.id ? 'true' : undefined}
+                    onClick={() => selectRoom(room.id)}
+                  >
+                    <span className="p7c-room-avatar">
+                      <Avatar name={title} src={peer?.avatarUrl || peer?.profileImage} />
+                      {presence && <OnlineStatus presence={presence} compact />}
+                    </span>
+                    <span className="p7c-room-copy">
+                      <span className="p7c-room-top">
+                        <strong>{title}</strong>
+                        <time>{timeAgo(room.lastActivityAt || room.updatedAt || room.lastMessage?.createdAt)}</time>
+                      </span>
+                      <span className="p7c-room-preview">
+                        {roomTyping ? `${roomTyping.fullName || 'Someone'} is typing...` : getLastMessage(room)}
+                      </span>
+                    </span>
+                    <span className="p7c-room-state">
+                      <UnreadBadge count={unread} />
+                      {room.hidden && <EyeOff size={15} aria-label="Hidden" />}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
+        <main className="p7c-chat-panel" aria-label={activeRoom ? `${activeTitle} chat` : 'No active conversation'}>
+          {activeRoom ? (
+            <>
+              <header className="p7c-chat-header">
+                <IconButton label="Back to conversations" className="p7c-chat-back" onClick={() => setShowMobileChat(false)}>
+                  <ArrowLeft size={18} />
+                </IconButton>
+                <Avatar name={activeTitle} src={activePresence?.avatarUrl || activePresence?.profileImage || getRoomPeer(activeRoom, user)?.avatarUrl || getRoomPeer(activeRoom, user)?.profileImage} />
+                <div className="p7c-chat-title">
+                  <h2>{activeTitle}</h2>
+                  {visibleTypingUsers.length > 0 ? (
+                    <p>{visibleTypingUsers[0].fullName || activeTitle} is typing...</p>
+                  ) : activePresence ? (
+                    <OnlineStatus presence={activePresence} />
+                  ) : (
+                    <p>{activeRoom.type === 'GROUP' ? 'Group conversation' : 'Conversation'}</p>
+                  )}
+                </div>
+                <DropdownMenu label={<MoreHorizontal size={18} />}>
+                  <button type="button" onClick={() => setRoomToHide(activeRoom.id)}>
+                    <BellOff size={14} /> Hide conversation
+                  </button>
+                </DropdownMenu>
+              </header>
+
+              <ChatWindow
+                room={activeRoom}
+                currentUserId={user?.userId || user?.id}
+                liveMessages={liveMessages}
+                typingUsers={typingUsers}
+                isConnected={isConnected}
+                connectionStatus={connectionStatus}
+                onSendMessage={handleSendMessage}
+                onTypingChange={sendTyping}
+                onMessagesRead={handleMessagesRead}
+                onDeleteMessage={apiService.deleteChatMessage}
+              />
+            </>
+          ) : (
+            <div className="p7c-empty-chat">
+              <div><MessageSquare size={36} /></div>
+              <h2>Select a conversation</h2>
+              <p>Choose a thread from the list to read messages, reply, and track receipts without losing your place.</p>
+            </div>
+          )}
+        </main>
+      </section>
+
+      <ConfirmationDialog
+        open={Boolean(roomToHide)}
+        title="Hide this conversation?"
+        message="This conversation will be hidden for you. It will not delete messages for the other person."
+        confirmLabel="Hide for me"
+        destructive
+        onCancel={() => setRoomToHide(null)}
+        onConfirm={handleHideConfirm}
+      />
     </div>
   );
 }
