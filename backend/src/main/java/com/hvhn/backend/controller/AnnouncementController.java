@@ -50,7 +50,7 @@ public class AnnouncementController {
             @AuthenticationPrincipal User currentUser
     ) {
         validateAdminAccess(id, currentUser);
-        announcementService.deleteAnnouncement(announcementId);
+        announcementService.deleteAnnouncement(id, announcementId);
         return ResponseEntity.noContent().build();
     }
 
@@ -61,7 +61,7 @@ public class AnnouncementController {
             @AuthenticationPrincipal User currentUser
     ) {
         validateAdminAccess(id, currentUser);
-        return announcementService.togglePin(announcementId);
+        return announcementService.togglePin(id, announcementId);
     }
 
     // Special endpoint for Help Feed banner

@@ -5,6 +5,8 @@ public class TypingEventView {
     private String userId;
     private String fullName;
     private String avatarInitial;
+    private String avatarUrl;
+    private String profileImage;
     private boolean typing;
     private String timestamp;
 
@@ -19,6 +21,10 @@ public class TypingEventView {
 
     public String getAvatarInitial() { return avatarInitial; }
     public void setAvatarInitial(String avatarInitial) { this.avatarInitial = avatarInitial; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public String getProfileImage() { return profileImage; }
+    public void setProfileImage(String profileImage) { this.profileImage = profileImage; }
 
     public boolean isTyping() { return typing; }
     public void setTyping(boolean typing) { this.typing = typing; }

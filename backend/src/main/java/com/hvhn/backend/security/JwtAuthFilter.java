@@ -36,11 +36,23 @@ import java.util.Optional;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private static final Logger logger = LoggerFactory.getLogger(JwtAuthFilter.class);
+    private final RequestMatcher protectedRequestEndpoints = new OrRequestMatcher(
+            new AntPathRequestMatcher("/api/requests/my", "GET"),
+            new AntPathRequestMatcher("/api/requests/volunteered", "GET")
+    );
 
     private final RequestMatcher publicEndpoints = new OrRequestMatcher(
             new AntPathRequestMatcher("/api/auth/**"),
             new AntPathRequestMatcher("/verifyToken"),
+            new AntPathRequestMatcher("/api/health/**"),
+            new AntPathRequestMatcher("/api/test/**"),
             new AntPathRequestMatcher("/api/public/**"),
+            new AntPathRequestMatcher("/api/requests/public/**"),
+            new AntPathRequestMatcher("/api/requests", "GET"),
+            new AntPathRequestMatcher("/api/requests/*", "GET"),
+            new AntPathRequestMatcher("/api/requests/open", "GET"),
+            new AntPathRequestMatcher("/api/community/announcements/pinned", "GET"),
+            new AntPathRequestMatcher("/api/communities", "GET"),
             new AntPathRequestMatcher("/ws/**"),
             new AntPathRequestMatcher("/uploads/**"),
             new AntPathRequestMatcher("/error")
@@ -59,7 +71,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         // Public endpoints stay unauthenticated, but every protected request must carry the app JWT.
-        return CorsUtils.isPreFlightRequest(request) || publicEndpoints.matches(request);
+        return CorsUtils.isPreFlightRequest(request) || (!protectedRequestEndpoints.matches(request) && publicEndpoints.matches(request));
     }
 
     @Override
@@ -136,7 +148,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 HttpStatus.UNAUTHORIZED.value(),
                 HttpStatus.UNAUTHORIZED.getReasonPhrase(),
                 message,
-                request.getRequestURI()
+                request.getRequestURI(),
+                String.valueOf(request.getAttribute("requestId"))
         );
         objectMapper.writeValue(response.getOutputStream(), errorResponse);
     }

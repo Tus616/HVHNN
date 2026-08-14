@@ -2,11 +2,13 @@ package com.hvhn.backend.model;
 
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
 
 @Document(collection = "announcements")
+@CompoundIndex(name = "idx_announcement_community_status_pinned_created", def = "{'communityId': 1, 'status': 1, 'isPinned': -1, 'createdAt': -1}")
 public class Announcement {
     @Id
     private String id;
@@ -16,6 +18,7 @@ public class Announcement {
     private String authorId;
     private String authorName;
     private boolean isPinned = false;
+    private String status = "ACTIVE";
 
     @CreatedDate
     private LocalDateTime createdAt = LocalDateTime.now();
@@ -42,6 +45,8 @@ public class Announcement {
 
     public boolean isPinned() { return isPinned; }
     public void setPinned(boolean pinned) { isPinned = pinned; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

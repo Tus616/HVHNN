@@ -4,6 +4,7 @@ import com.hvhn.backend.security.JwtHandshakeHandler;
 import com.hvhn.backend.security.JwtHandshakeInterceptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
@@ -17,14 +18,18 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final JwtHandshakeInterceptor jwtHandshakeInterceptor;
     private final String allowedOriginsProperty;
+    private final boolean productionProfile;
 
     public WebSocketConfig(
             JwtHandshakeInterceptor jwtHandshakeInterceptor,
-            @Value("${app.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173}")
-            String allowedOriginsProperty
+            @Value("${app.cors.allowed-origins}")
+            String allowedOriginsProperty,
+            Environment environment
     ) {
         this.jwtHandshakeInterceptor = jwtHandshakeInterceptor;
         this.allowedOriginsProperty = allowedOriginsProperty;
+        this.productionProfile = Arrays.stream(environment.getActiveProfiles())
+                .anyMatch(profile -> profile.equalsIgnoreCase("prod") || profile.equalsIgnoreCase("production"));
     }
 
     @Override
@@ -40,13 +45,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void configureMessageBroker(MessageBrokerRegistry registry) {
         registry.enableSimpleBroker("/topic", "/queue");
         registry.setApplicationDestinationPrefixes("/app");
-        registry.setUserDestinationPrefix("/queue");
+        registry.setUserDestinationPrefix("/user");
     }
 
     private String[] parseConfiguredOrigins() {
-        return Arrays.stream(allowedOriginsProperty.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty())
-                .toArray(String[]::new);
+        return CorsOriginParser.parse(allowedOriginsProperty, productionProfile).toArray(String[]::new);
     }
 }

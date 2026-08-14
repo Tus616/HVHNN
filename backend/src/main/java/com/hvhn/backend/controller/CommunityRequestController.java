@@ -25,7 +25,7 @@ public class CommunityRequestController {
         this.communityService = communityService;
     }
 
-    @PutMapping({"/api/requests/{requestId}", "/requests/{requestId}"})
+    @PutMapping({"/api/community-requests/{requestId}", "/community-requests/{requestId}"})
     public ResponseEntity<Map<String, Object>> updateRequest(
             @PathVariable String requestId,
             @Valid @RequestBody CommunityRequestUpdateRequest request,
@@ -35,7 +35,7 @@ public class CommunityRequestController {
         return ResponseEntity.ok(mapRequest(updatedRequest));
     }
 
-    @DeleteMapping({"/api/requests/{requestId}", "/requests/{requestId}"})
+    @DeleteMapping({"/api/community-requests/{requestId}", "/community-requests/{requestId}"})
     public ResponseEntity<Void> deleteRequest(
             @PathVariable String requestId,
             @AuthenticationPrincipal User currentUser

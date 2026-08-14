@@ -1,6 +1,9 @@
 HELP.md
 target/
+.m2/
 .mvn/wrapper/maven-wrapper.jar
+logs/
+*.log
 !**/src/main/**/target/
 !**/src/test/**/target/
 
@@ -34,6 +37,17 @@ build/
 
 # Firebase service account key
 src/main/resources/firebase/serviceAccountKey.json
+src/main/resources/firebase/*.json
+*service-account*.json
+*serviceAccount*.json
 
 # Secrets
 src/main/resources/application.properties
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig

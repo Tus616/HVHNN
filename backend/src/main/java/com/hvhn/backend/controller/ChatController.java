@@ -43,6 +43,21 @@ public class ChatController {
         return ResponseEntity.ok(chatService.getRooms(currentUser));
     }
 
+    @GetMapping("/conversations")
+    public ResponseEntity<List<ChatRoomView>> getConversations(@AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(chatService.getRooms(currentUser));
+    }
+
+    @GetMapping("/conversations/{roomId}/messages")
+    public ResponseEntity<ChatHistoryResponse> getConversationMessages(
+            @AuthenticationPrincipal User currentUser,
+            @PathVariable String roomId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size
+    ) {
+        return ResponseEntity.ok(chatService.getHistory(currentUser, roomId, page, size));
+    }
+
     @PostMapping("/rooms/direct")
     public ResponseEntity<ChatRoomView> createDirectRoom(
             @AuthenticationPrincipal User currentUser,
@@ -67,8 +82,26 @@ public class ChatController {
         return ResponseEntity.ok(chatService.markRead(currentUser, messageId));
     }
 
+    @PostMapping("/conversations/{roomId}/seen")
+    public ResponseEntity<UnreadUpdateResponse> markConversationSeen(
+            @AuthenticationPrincipal User currentUser,
+            @PathVariable String roomId,
+            @RequestParam(required = false) String lastSeenMessageId
+    ) {
+        return ResponseEntity.ok(chatService.markSeen(currentUser, roomId, lastSeenMessageId));
+    }
+
     @PostMapping("/{messageId}/react")
     public ResponseEntity<ChatMessageView> toggleReaction(
+            @AuthenticationPrincipal User currentUser,
+            @PathVariable String messageId,
+            @RequestParam String emoji
+    ) {
+        return ResponseEntity.ok(chatService.toggleReaction(currentUser, messageId, emoji));
+    }
+
+    @PostMapping("/messages/{messageId}/react")
+    public ResponseEntity<ChatMessageView> toggleMessageReaction(
             @AuthenticationPrincipal User currentUser,
             @PathVariable String messageId,
             @RequestParam String emoji
@@ -92,6 +125,15 @@ public class ChatController {
 
     @DeleteMapping("/rooms/{roomId}")
     public ResponseEntity<Void> deleteRoom(
+            @AuthenticationPrincipal User currentUser,
+            @PathVariable String roomId
+    ) {
+        chatService.deleteRoom(currentUser, roomId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/conversations/{roomId}")
+    public ResponseEntity<Void> hideConversation(
             @AuthenticationPrincipal User currentUser,
             @PathVariable String roomId
     ) {

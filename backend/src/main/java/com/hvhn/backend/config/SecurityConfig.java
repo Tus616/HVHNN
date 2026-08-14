@@ -9,6 +9,7 @@ import org.springframework.security.web.header.writers.StaticHeadersWriter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -33,20 +34,24 @@ public class SecurityConfig {
     private final RestAuthenticationEntryPoint restAuthenticationEntryPoint;
     private final RestAccessDeniedHandler restAccessDeniedHandler;
     private final String allowedOriginsProperty;
+    private final boolean productionProfile;
 
     public SecurityConfig(
             JwtAuthFilter jwtAuthFilter,
             RequestLoggingFilter requestLoggingFilter,
             RestAuthenticationEntryPoint restAuthenticationEntryPoint,
             RestAccessDeniedHandler restAccessDeniedHandler,
-            @Value("${app.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}")
-            String allowedOriginsProperty
+            @Value("${app.cors.allowed-origins}")
+            String allowedOriginsProperty,
+            Environment environment
     ) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.requestLoggingFilter = requestLoggingFilter;
         this.restAuthenticationEntryPoint = restAuthenticationEntryPoint;
         this.restAccessDeniedHandler = restAccessDeniedHandler;
         this.allowedOriginsProperty = allowedOriginsProperty;
+        this.productionProfile = Arrays.stream(environment.getActiveProfiles())
+                .anyMatch(profile -> profile.equalsIgnoreCase("prod") || profile.equalsIgnoreCase("production"));
     }
 
     @Bean
@@ -63,6 +68,8 @@ public class SecurityConfig {
                         .requestMatchers(new AntPathRequestMatcher("/api/auth/**")).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/auth/**")).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/verifyToken")).permitAll()
+                        .requestMatchers(new AntPathRequestMatcher("/api/health/**")).permitAll()
+                        .requestMatchers(new AntPathRequestMatcher("/api/test/**")).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/api/public/**")).permitAll()
                         .requestMatchers(new AntPathRequestMatcher("/api/requests/public/**")).permitAll()
                         // Public read-only endpoints (feed/detail should work without login)
@@ -108,9 +115,6 @@ public class SecurityConfig {
     }
 
     private List<String> parseConfiguredOrigins() {
-        return Arrays.stream(allowedOriginsProperty.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty())
-                .toList();
+        return CorsOriginParser.parse(allowedOriginsProperty, productionProfile);
     }
 }

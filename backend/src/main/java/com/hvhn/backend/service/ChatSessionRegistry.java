@@ -19,6 +19,11 @@ public class ChatSessionRegistry {
         return sessions.size() == 1;
     }
 
+    public int getActiveSessionCount(String userId) {
+        Set<String> sessions = userToSessions.get(userId);
+        return sessions == null ? 0 : sessions.size();
+    }
+
     public Optional<String> unregisterSession(String sessionId) {
         String userId = sessionToUser.remove(sessionId);
         if (userId == null) {
@@ -33,10 +38,9 @@ public class ChatSessionRegistry {
         sessions.remove(sessionId);
         if (sessions.isEmpty()) {
             userToSessions.remove(userId);
-            return Optional.of(userId);
         }
 
-        return Optional.empty();
+        return Optional.of(userId);
     }
 
     public boolean hasActiveSession(String userId) {

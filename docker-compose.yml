@@ -1,19 +1,44 @@
 version: '3.8'
 
 services:
+  mongodb:
+    image: mongo:7.0.14
+    container_name: hvhn-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - hvhn-mongodb-data:/data/db
+    networks:
+      - hvhn-network
+
+  mailpit:
+    image: axllent/mailpit:v1.20.4
+    container_name: hvhn-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - hvhn-network
+
   backend:
     build: ./backend
     container_name: hvhn-backend
     ports:
       - "8080:8080"
-    # Secrets moved to environment variables for security
     environment:
-      - SPRING_DATA_MONGODB_URI=${SPRING_DATA_MONGODB_URI}
-      - APP_MAIL_USERNAME=${APP_MAIL_USERNAME}
-      - APP_MAIL_PASSWORD=${APP_MAIL_PASSWORD}
-      - APP_MAIL_FROM=${APP_MAIL_FROM}
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/hvhn}
+      - JWT_SECRET=${JWT_SECRET:-replace-with-a-long-local-development-secret}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      - SMTP_HOST=${SMTP_HOST:-mailpit}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_AUTH=${SMTP_AUTH:-false}
+      - SMTP_STARTTLS=${SMTP_STARTTLS:-false}
+      - MAIL_FROM=${MAIL_FROM:-no-reply@hvhn.local}
     networks:
       - hvhn-network
+    depends_on:
+      - mongodb
+      - mailpit
     volumes:
       - ./backend/uploads:/app/uploads
 
@@ -30,3 +55,6 @@ services:
 networks:
   hvhn-network:
     driver: bridge
+
+volumes:
+  hvhn-mongodb-data:

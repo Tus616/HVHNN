@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,13 +25,16 @@ public class FirebaseConfig {
     private static final Logger logger = LoggerFactory.getLogger(FirebaseConfig.class);
     private static final Object FIREBASE_INIT_MONITOR = new Object();
 
-    private final Resource serviceAccountResource;
+    private final String serviceAccountPath;
+    private final ResourceLoader resourceLoader;
 
     public FirebaseConfig(
-            @Value("${firebase.service-account.path:classpath:firebase/serviceAccountKey.json}")
-            Resource serviceAccountResource
+            @Value("${firebase.service-account.path:}")
+            String serviceAccountPath,
+            ResourceLoader resourceLoader
     ) {
-        this.serviceAccountResource = serviceAccountResource;
+        this.serviceAccountPath = serviceAccountPath;
+        this.resourceLoader = resourceLoader;
     }
 
     @Bean
@@ -40,15 +45,20 @@ public class FirebaseConfig {
             if (!FirebaseApp.getApps().isEmpty()) {
                 FirebaseApp existingApp = FirebaseApp.getInstance();
                 logger.info(
-                        "Reusing existing Firebase app '{}' from {}. serverTimeUtc={} zoneId={}",
+                        "Reusing existing Firebase app '{}'. serverTimeUtc={} zoneId={}",
                         existingApp.getName(),
-                        serviceAccountResource.getDescription(),
                         Instant.now(),
                         ZoneId.systemDefault()
                 );
                 return existingApp;
             }
 
+            if (!StringUtils.hasText(serviceAccountPath)) {
+                logger.warn("Firebase service account path is not configured. Bypassing Firebase initialization.");
+                return null;
+            }
+
+            Resource serviceAccountResource = resourceLoader.getResource(serviceAccountPath);
             if (!serviceAccountResource.exists()) {
                 logger.warn(
                         "Firebase service account file was not found at "

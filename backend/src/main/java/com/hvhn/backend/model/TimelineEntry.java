@@ -7,6 +7,9 @@ public class TimelineEntry {
     private LocalDateTime timestamp;
     private String actorName;
     private String actorId;
+    private String actorRole;
+    private String previousStatus;
+    private String newStatus;
     private String comment;
 
     public TimelineEntry() {}
@@ -30,6 +33,15 @@ public class TimelineEntry {
 
     public String getActorId() { return actorId; }
     public void setActorId(String actorId) { this.actorId = actorId; }
+
+    public String getActorRole() { return actorRole; }
+    public void setActorRole(String actorRole) { this.actorRole = actorRole; }
+
+    public String getPreviousStatus() { return previousStatus; }
+    public void setPreviousStatus(String previousStatus) { this.previousStatus = previousStatus; }
+
+    public String getNewStatus() { return newStatus; }
+    public void setNewStatus(String newStatus) { this.newStatus = newStatus; }
 
     public String getComment() { return comment; }
     public void setComment(String comment) { this.comment = comment; }

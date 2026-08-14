@@ -27,6 +27,14 @@ public class AuthResponse {
     private String badge;
     private List<String> badges = new ArrayList<>();
     private String verificationLevel;
+    private boolean onboardingCompleted;
+    private String authProvider;
+    private String profileImage;
+    private String bio;
+    private String city;
+    private String district;
+    private String state;
+    private String postalCode;
 
     public AuthResponse() {}
     public AuthResponse(String token, String email, String fullName, String role, String userId) {
@@ -84,4 +92,20 @@ public class AuthResponse {
 
     public String getVerificationLevel() { return verificationLevel; }
     public void setVerificationLevel(String verificationLevel) { this.verificationLevel = verificationLevel; }
+    public boolean isOnboardingCompleted() { return onboardingCompleted; }
+    public void setOnboardingCompleted(boolean onboardingCompleted) { this.onboardingCompleted = onboardingCompleted; }
+    public String getAuthProvider() { return authProvider; }
+    public void setAuthProvider(String authProvider) { this.authProvider = authProvider; }
+    public String getProfileImage() { return profileImage; }
+    public void setProfileImage(String profileImage) { this.profileImage = profileImage; }
+    public String getBio() { return bio; }
+    public void setBio(String bio) { this.bio = bio; }
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
+    public String getState() { return state; }
+    public void setState(String state) { this.state = state; }
+    public String getPostalCode() { return postalCode; }
+    public void setPostalCode(String postalCode) { this.postalCode = postalCode; }
 }

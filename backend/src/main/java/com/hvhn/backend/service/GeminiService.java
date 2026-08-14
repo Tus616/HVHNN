@@ -20,6 +20,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Core service for calling Google Gemini API via Vertex AI REST endpoints.
@@ -43,21 +44,42 @@ public class GeminiService {
     @Value("${gemini.embedding-model}")
     private String embeddingModel;
 
-    @Value("${gemini.service-account.path}")
-    private Resource serviceAccountResource;
+    @Value("${gemini.service-account.path:}")
+    private String serviceAccountPath;
 
+    @Value("${gemini.api-key:}")
+    private String apiKey;
+
+    private final org.springframework.core.io.ResourceLoader resourceLoader;
     private GoogleCredentials credentials;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
             .build();
 
+    public GeminiService(org.springframework.core.io.ResourceLoader resourceLoader) {
+        this.resourceLoader = resourceLoader;
+    }
+
     @PostConstruct
     public void init() {
-        try (InputStream is = serviceAccountResource.getInputStream()) {
-            credentials = GoogleCredentials.fromStream(is)
-                    .createScoped(List.of("https://www.googleapis.com/auth/cloud-platform"));
-            credentials.refreshIfExpired();
-            logger.info("Gemini AI service initialized successfully for project: {}", projectId);
+        if (!org.springframework.util.StringUtils.hasText(serviceAccountPath)) {
+            if (org.springframework.util.StringUtils.hasText(apiKey)) {
+                logger.info("Using direct Gemini API Key fallback");
+            } else {
+                logger.warn("Neither Gemini service account nor API key configured. AI features will fail or use fallback.");
+            }
+            credentials = null;
+            return;
+        }
+
+        try {
+            org.springframework.core.io.Resource serviceAccountResource = resourceLoader.getResource(serviceAccountPath);
+            try (InputStream is = serviceAccountResource.getInputStream()) {
+                credentials = GoogleCredentials.fromStream(is)
+                        .createScoped(List.of("https://www.googleapis.com/auth/cloud-platform"));
+                credentials.refreshIfExpired();
+                logger.info("Gemini AI service initialized successfully for project: {}", projectId);
+            }
         } catch (Exception e) {
             logger.error("Failed to initialize Gemini AI service. AI features will use fallback logic.", e);
             credentials = null;
@@ -68,7 +90,7 @@ public class GeminiService {
      * Returns true if the Gemini API is properly configured and available.
      */
     public boolean isAvailable() {
-        return credentials != null;
+        return credentials != null || org.springframework.util.StringUtils.hasText(apiKey);
     }
 
     /**
@@ -81,10 +103,9 @@ public class GeminiService {
         }
 
         try {
-            String endpoint = String.format(
-                    "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
-                    location, projectId, location, model
-            );
+            String endpoint = credentials != null
+                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
+                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             ArrayNode contents = requestBody.putArray("contents");
@@ -107,6 +128,48 @@ public class GeminiService {
     }
 
     /**
+     * Send a conversation history to Gemini and get the response text.
+     */
+    public String generateChat(List<Map<String, String>> history) {
+        if (!isAvailable()) {
+            logger.warn("Gemini is not available. Returning null.");
+            return null;
+        }
+
+        try {
+            String endpoint = credentials != null
+                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
+                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
+
+            ObjectNode requestBody = objectMapper.createObjectNode();
+            ArrayNode contents = requestBody.putArray("contents");
+
+            for (Map<String, String> msg : history) {
+                String role = msg.getOrDefault("role", "user");
+                if ("assistant".equals(role)) {
+                    role = "model";
+                }
+                
+                ObjectNode content = contents.addObject();
+                content.put("role", role);
+                ArrayNode parts = content.putArray("parts");
+                parts.addObject().put("text", msg.getOrDefault("text", ""));
+            }
+
+            ObjectNode generationConfig = requestBody.putObject("generationConfig");
+            generationConfig.put("temperature", 0.2);
+            generationConfig.put("maxOutputTokens", 1024);
+
+            String responseBody = callGeminiApi(endpoint, requestBody.toString());
+            return extractTextFromResponse(responseBody);
+
+        } catch (Exception e) {
+            logger.error("Gemini chat generation failed: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
      * Send an image (Base64) + text prompt to Gemini Vision and get the response.
      */
     public String analyzeImage(String base64Image, String mimeType, String prompt) {
@@ -116,10 +179,9 @@ public class GeminiService {
         }
 
         try {
-            String endpoint = String.format(
-                    "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
-                    location, projectId, location, model
-            );
+            String endpoint = credentials != null
+                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent", location, projectId, location, model)
+                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             ArrayNode contents = requestBody.putArray("contents");
@@ -158,19 +220,27 @@ public class GeminiService {
         }
 
         try {
-            String endpoint = String.format(
-                    "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-                    location, projectId, location, embeddingModel
-            );
+            boolean isVertex = credentials != null;
+            String endpoint = isVertex
+                ? String.format("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict", location, projectId, location, embeddingModel)
+                : String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s", embeddingModel, apiKey);
 
             ObjectNode requestBody = objectMapper.createObjectNode();
-            ArrayNode instances = requestBody.putArray("instances");
-            ObjectNode instance = instances.addObject();
-            instance.put("content", text);
-            instance.put("task_type", "RETRIEVAL_DOCUMENT");
+            
+            if (isVertex) {
+                ArrayNode instances = requestBody.putArray("instances");
+                ObjectNode instance = instances.addObject();
+                instance.put("content", text);
+                instance.put("task_type", "RETRIEVAL_DOCUMENT");
+            } else {
+                requestBody.put("model", "models/" + embeddingModel);
+                ObjectNode contentNode = requestBody.putObject("content");
+                ArrayNode partsNode = contentNode.putArray("parts");
+                partsNode.addObject().put("text", text);
+            }
 
             String responseBody = callGeminiApi(endpoint, requestBody.toString());
-            return extractEmbeddingFromResponse(responseBody);
+            return extractEmbeddingFromResponse(responseBody, isVertex);
 
         } catch (Exception e) {
             logger.error("Gemini embedding generation failed: {}", e.getMessage(), e);
@@ -178,20 +248,28 @@ public class GeminiService {
         }
     }
 
-    private List<Double> extractEmbeddingFromResponse(String responseBody) {
+    private List<Double> extractEmbeddingFromResponse(String responseBody, boolean isVertex) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            JsonNode predictions = root.path("predictions");
-            if (predictions.isArray() && !predictions.isEmpty()) {
-                JsonNode values = predictions.get(0).path("embeddings").path("values");
-                if (values.isArray()) {
-                    List<Double> embedding = new java.util.ArrayList<>();
-                    for (JsonNode value : values) {
-                        embedding.add(value.asDouble());
-                    }
-                    return embedding;
+            JsonNode values = null;
+            
+            if (isVertex) {
+                JsonNode predictions = root.path("predictions");
+                if (predictions.isArray() && !predictions.isEmpty()) {
+                    values = predictions.get(0).path("embeddings").path("values");
                 }
+            } else {
+                values = root.path("embedding").path("values");
             }
+
+            if (values != null && values.isArray()) {
+                List<Double> embedding = new java.util.ArrayList<>();
+                for (JsonNode value : values) {
+                    embedding.add(value.asDouble());
+                }
+                return embedding;
+            }
+            
             logger.warn("No embedding values found in Gemini response.");
             return null;
         } catch (Exception e) {
@@ -229,16 +307,19 @@ public class GeminiService {
     }
 
     private String callGeminiApi(String endpoint, String body) throws Exception {
-        credentials.refreshIfExpired();
-        AccessToken token = credentials.getAccessToken();
-
-        HttpRequest request = HttpRequest.newBuilder()
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(30))
-                .header("Authorization", "Bearer " + token.getTokenValue())
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+
+        if (credentials != null) {
+            credentials.refreshIfExpired();
+            AccessToken token = credentials.getAccessToken();
+            requestBuilder.header("Authorization", "Bearer " + token.getTokenValue());
+        }
+
+        HttpRequest request = requestBuilder.build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 

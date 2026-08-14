@@ -14,6 +14,7 @@ public class ChatMessagePayload {
     @NotNull(message = "Message type is required")
     private ChatMessageType messageType = ChatMessageType.CHAT;
 
+    private String clientMessageId;
     private String replyToMessageId;
 
     public String getRoomId() { return roomId; }
@@ -24,6 +25,9 @@ public class ChatMessagePayload {
 
     public ChatMessageType getMessageType() { return messageType; }
     public void setMessageType(ChatMessageType messageType) { this.messageType = messageType; }
+
+    public String getClientMessageId() { return clientMessageId; }
+    public void setClientMessageId(String clientMessageId) { this.clientMessageId = clientMessageId; }
 
     public String getReplyToMessageId() { return replyToMessageId; }
     public void setReplyToMessageId(String replyToMessageId) { this.replyToMessageId = replyToMessageId; }

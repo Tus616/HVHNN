@@ -12,6 +12,9 @@ public class ChatRoomView {
     private List<String> participantIds = new ArrayList<>();
     private List<ChatParticipantView> participants = new ArrayList<>();
     private int unreadCount;
+    private boolean hidden;
+    private boolean archived;
+    private boolean muted;
     private String createdAt;
     private String lastMessageId;
     private String lastMessage;
@@ -36,6 +39,15 @@ public class ChatRoomView {
 
     public int getUnreadCount() { return unreadCount; }
     public void setUnreadCount(int unreadCount) { this.unreadCount = unreadCount; }
+
+    public boolean isHidden() { return hidden; }
+    public void setHidden(boolean hidden) { this.hidden = hidden; }
+
+    public boolean isArchived() { return archived; }
+    public void setArchived(boolean archived) { this.archived = archived; }
+
+    public boolean isMuted() { return muted; }
+    public void setMuted(boolean muted) { this.muted = muted; }
 
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }

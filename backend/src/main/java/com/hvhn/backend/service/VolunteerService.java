@@ -1,16 +1,22 @@
 package com.hvhn.backend.service;
 
 import com.hvhn.backend.model.HelpRequest;
+import com.hvhn.backend.dto.NearbyVolunteerCandidate;
 import com.hvhn.backend.model.RequestVolunteer;
 import com.hvhn.backend.model.TimelineEntry;
 import com.hvhn.backend.model.User;
 import com.hvhn.backend.model.VolunteerRating;
+import com.hvhn.backend.model.enums.NotificationCategory;
+import com.hvhn.backend.model.enums.NotificationPriority;
+import com.hvhn.backend.model.enums.NotificationType;
+import com.hvhn.backend.model.enums.VolunteerCategory;
 import com.hvhn.backend.repository.HelpRequestRepository;
 import com.hvhn.backend.repository.RequestVolunteerRepository;
 import com.hvhn.backend.repository.UserRepository;
 import com.hvhn.backend.repository.VolunteerRatingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -40,37 +46,61 @@ public class VolunteerService {
     private static final String ASSIGNMENT_ACCEPTED = "ACCEPTED";
     private static final String ASSIGNMENT_COMPLETED = "COMPLETED";
     private static final String REQUEST_OPEN = "OPEN";
-    private static final String REQUEST_ACTIVE = "ACTIVE";
+    private static final String REQUEST_ASSIGNED = "ASSIGNED";
+    private static final String REQUEST_ACTIVE = "IN_PROGRESS";
+    private static final String REQUEST_COMPLETION_REQUESTED = "COMPLETION_REQUESTED";
     private static final String REQUEST_COMPLETED = "COMPLETED";
-    private static final Set<String> ALLOWED_CATEGORIES = Set.of("BLOOD", "MEDICAL", "FOOD", "GENERAL");
-    private static final Set<String> ALLOWED_PROGRESS = Set.of("ON_THE_WAY", "REACHED", "COMPLETED");
+    private static final Set<String> ALLOWED_PROGRESS = Set.of(
+            "ON_THE_WAY",
+            "REACHED",
+            "HELPING",
+            "REQUEST_COMPLETION",
+            "COMPLETION_REQUESTED",
+            "PENDING_COMPLETION",
+            "COMPLETED"
+    );
 
     private final HelpRequestRepository helpRequestRepository;
     private final UserRepository userRepository;
     private final RequestVolunteerRepository requestVolunteerRepository;
     private final VolunteerRatingRepository volunteerRatingRepository;
-    private final FirebaseService firebaseService;
+    private final NotificationService notificationService;
     private final HelpRequestService helpRequestService;
     private final RequestViewMapper requestViewMapper;
     private final UserViewMapper userViewMapper;
+    private final GeospatialService geospatialService;
+    private final LocationService locationService;
+    private final MlIntelligenceService mlIntelligenceService;
+    private final MlMatchingEventService mlMatchingEventService;
+    private final int volunteerTopK;
 
     public VolunteerService(HelpRequestRepository helpRequestRepository,
                             UserRepository userRepository,
                             RequestVolunteerRepository requestVolunteerRepository,
                             VolunteerRatingRepository volunteerRatingRepository,
-                            FirebaseService firebaseService,
+                            NotificationService notificationService,
                             @org.springframework.context.annotation.Lazy HelpRequestService helpRequestService,
                             RequestViewMapper requestViewMapper,
-                            UserViewMapper userViewMapper) {
+                            UserViewMapper userViewMapper,
+                            GeospatialService geospatialService,
+                            LocationService locationService,
+                            MlIntelligenceService mlIntelligenceService,
+                            MlMatchingEventService mlMatchingEventService,
+                            @Value("${ml.volunteer-top-k:${ML_VOLUNTEER_TOP_K:20}}") int volunteerTopK) {
 
         this.helpRequestRepository = helpRequestRepository;
         this.userRepository = userRepository;
         this.requestVolunteerRepository = requestVolunteerRepository;
         this.volunteerRatingRepository = volunteerRatingRepository;
-        this.firebaseService = firebaseService;
+        this.notificationService = notificationService;
         this.helpRequestService = helpRequestService;
         this.requestViewMapper = requestViewMapper;
         this.userViewMapper = userViewMapper;
+        this.geospatialService = geospatialService;
+        this.locationService = locationService;
+        this.mlIntelligenceService = mlIntelligenceService;
+        this.mlMatchingEventService = mlMatchingEventService;
+        this.volunteerTopK = Math.max(1, Math.min(volunteerTopK, 100));
     }
 
     public Map<String, Object> toggleVolunteer(User user, boolean isVolunteer) {
@@ -78,6 +108,9 @@ public class VolunteerService {
         user.setVolunteer(isVolunteer);
         if (!isVolunteer) {
             user.setVolunteerStatus(VOLUNTEER_OFFLINE);
+            user.setVolunteerCategories(List.of());
+        } else if (user.getVolunteerSetupCompletedAt() == null) {
+            user.setVolunteerSetupCompletedAt(LocalDateTime.now());
         }
         return userViewMapper.toUserMap(userRepository.save(user));
     }
@@ -93,8 +126,11 @@ public class VolunteerService {
             throw new IllegalArgumentException("Latitude and longitude are required.");
         }
         User volunteer = requireVerifiedUser(user);
+        volunteer.setLocation(locationService.point(latitude, longitude));
         volunteer.setLatitude(latitude);
         volunteer.setLongitude(longitude);
+        volunteer.setLocationSource(LocationService.SOURCE_BROWSER);
+        volunteer.setLocationUpdatedAt(LocalDateTime.now());
         return userViewMapper.toUserMap(userRepository.save(volunteer));
     }
 
@@ -150,7 +186,10 @@ public class VolunteerService {
             return;
         }
 
-        List<VolunteerMatch> matches = findNearbyVolunteerMatches(request);
+        List<VolunteerMatch> matches = rankVolunteerMatches(request, findNearbyVolunteerMatches(request))
+                .stream()
+                .limit(volunteerTopK)
+                .toList();
         
         // Find tier based on match radiuses
         double primaryRadius = request.getDynamicRadiusKm() != null ? request.getDynamicRadiusKm() : 5.0;
@@ -185,53 +224,16 @@ public class VolunteerService {
                 ? request.getTitle() + " needs help within " + match.radiusKm() + " km. You are a trusted volunteer, please coordinate!"
                 : request.getTitle() + " needs help within " + match.radiusKm() + " km.";
 
-            sendNotification(match.user(), title, body);
+            sendNotification(match.user(), NotificationType.REQUEST_CREATED_NEARBY, title, body, request);
         }
     }
 
     public Map<String, Object> acceptRequest(String requestId, User user) {
         User volunteer = requireVolunteerUser(user);
-        HelpRequest request = getRequest(requestId);
-
-        if (request.getRequesterId() != null && request.getRequesterId().equals(volunteer.getId())) {
-            logger.warn("User {} tried to accept their own request {}", volunteer.getId(), requestId);
-            throw new IllegalArgumentException("You cannot accept your own request.");
-        }
-        if (!REQUEST_OPEN.equalsIgnoreCase(request.getStatus())) {
-            logger.warn("User {} tried to accept request {} which is in status {}", volunteer.getId(), requestId, request.getStatus());
-            throw new IllegalArgumentException("This request is no longer available.");
-        }
-
-        VolunteerMatch directMatch = ensureVolunteerCanHandleRequest(request, volunteer);
-        RequestVolunteer assignment = requestVolunteerRepository.findByRequestIdAndVolunteerId(requestId, volunteer.getId())
-                .orElseGet(RequestVolunteer::new);
-        assignment.setRequestId(requestId);
-        assignment.setVolunteerId(volunteer.getId());
-        assignment.setStatus(ASSIGNMENT_ACCEPTED);
-        assignment.setDistanceKm(directMatch.distanceKm());
-        assignment.setRadiusKm(directMatch.radiusKm());
-        assignment.setRespondedAt(LocalDateTime.now());
-        requestVolunteerRepository.save(assignment);
-
-        request.setStatus(REQUEST_ACTIVE);
-        request.setVolunteerId(volunteer.getId());
-        request.setVolunteerName(volunteer.getFullName());
-        request.setAcceptedAt(LocalDateTime.now());
-        request.setVolunteerProgressStatus("ASSIGNED");
-        request.setVolunteerStatusUpdatedAt(LocalDateTime.now());
-        request.setResponseCount(request.getResponseCount() + 1);
-        request.setRequesterRatingPending(false);
-        request.setRequesterRated(false);
-
-        volunteer.setPoints(volunteer.getPoints() + 10);
-        userRepository.save(volunteer);
-        
-        helpRequestService.addTimelineEntry(request, "VOLUNTEER_ACCEPTED", volunteer.getFullName(), volunteer.getId());
-        
-        HelpRequest saved = helpRequestRepository.save(request);
-
-        notifyRequester(saved, "Volunteer is on the way", volunteer.getFullName() + " accepted your request.");
-        return requestViewMapper.toRequestMap(saved, directMatch.distanceKm());
+        HelpRequest saved = helpRequestService.acceptRequest(requestId, volunteer);
+        mlMatchingEventService.markAccepted(requestId, volunteer.getId());
+        notifyRequester(saved, "Volunteer assigned", volunteer.getFullName() + " accepted your request.");
+        return requestViewMapper.toRequestMap(saved);
     }
 
     public Map<String, Object> declineRequest(String requestId, User user) {
@@ -257,90 +259,16 @@ public class VolunteerService {
 
     public Map<String, Object> updateRequestProgress(String requestId, User user, String nextStatus) {
         User volunteer = requireVolunteerUser(user);
-        HelpRequest request = getRequest(requestId);
         String normalizedStatus = normalizeProgressStatus(nextStatus);
 
-        if (!volunteer.getId().equals(request.getVolunteerId())) {
-            throw new IllegalArgumentException("Only the assigned volunteer can update this request.");
-        }
-        if (!REQUEST_ACTIVE.equalsIgnoreCase(request.getStatus()) && !REQUEST_COMPLETED.equalsIgnoreCase(request.getStatus())) {
-            throw new IllegalArgumentException("This request is not currently active.");
-        }
-
-        request.setVolunteerProgressStatus(normalizedStatus);
-        request.setVolunteerStatusUpdatedAt(LocalDateTime.now());
-
-        RequestVolunteer assignment = requestVolunteerRepository.findByRequestIdAndVolunteerId(requestId, volunteer.getId())
-                .orElseGet(() -> {
-                    RequestVolunteer value = new RequestVolunteer();
-                    value.setRequestId(requestId);
-                    value.setVolunteerId(volunteer.getId());
-                    return value;
-                });
-
-        if ("COMPLETED".equals(normalizedStatus)) {
-            request.setStatus(REQUEST_COMPLETED);
-            request.setCompletedAt(LocalDateTime.now());
-            request.setRequesterRatingPending(true);
-            request.setRequesterRated(false);
-            
-            // Calculate response time
-            if (request.getCreatedAt() != null) {
-                long minutes = Duration.between(request.getCreatedAt(), request.getCompletedAt()).toMinutes();
-                request.setTotalResponseTimeMinutes(minutes);
-            }
-            
-            helpRequestService.addTimelineEntry(request, "COMPLETED", volunteer.getFullName(), volunteer.getId());
-            
-            volunteer.setPoints(volunteer.getPoints() + 50);
-            
-            // Extra points for using a specific skill
-            if (StringUtils.hasText(request.getRequiredSkill())) {
-                volunteer.setPoints(volunteer.getPoints() + 25);
-                logger.info("Volunteer {} received specialist bonus for request {}", volunteer.getId(), requestId);
-            }
-
-            // Streak & Impact Tracking
-            LocalDate today = LocalDate.now();
-            if (volunteer.getLastHelpDate() == null) {
-                volunteer.setCurrentStreak(1);
-            } else {
-                LocalDate lastHelp = volunteer.getLastHelpDate().toLocalDate();
-                if (lastHelp.isEqual(today.minusDays(1))) {
-                    volunteer.setCurrentStreak(volunteer.getCurrentStreak() + 1);
-                } else if (lastHelp.isBefore(today.minusDays(1))) {
-                    volunteer.setCurrentStreak(1);
-                }
-            }
-            if (volunteer.getCurrentStreak() > volunteer.getLongestStreak()) {
-                volunteer.setLongestStreak(volunteer.getCurrentStreak());
-            }
-            volunteer.setLastHelpDate(LocalDateTime.now());
-            volunteer.setTotalPeopleHelped(volunteer.getTotalPeopleHelped() + 1);
-            if (assignment.getDistanceKm() != null) {
-                volunteer.setTotalDistanceTraveled(volunteer.getTotalDistanceTraveled() + assignment.getDistanceKm());
-            }
-            
-            userRepository.save(volunteer);
-            assignment.setStatus(ASSIGNMENT_COMPLETED);
-            assignment.setCompletedAt(LocalDateTime.now());
-            notifyRequester(request,
-                    "Request completed",
-                    "Please rate " + volunteer.getFullName() + " for completing your request.");
-        } else {
-            request.setStatus(REQUEST_ACTIVE);
-            assignment.setStatus(ASSIGNMENT_ACCEPTED);
-            
-            helpRequestService.addTimelineEntry(request, normalizedStatus, volunteer.getFullName(), volunteer.getId());
-            
-            notifyRequester(request,
-                    "Volunteer update",
-                    volunteer.getFullName() + " marked your request as " + normalizedStatus.replace('_', ' ').toLowerCase(Locale.ROOT) + ".");
-        }
-
-        assignment.setRespondedAt(LocalDateTime.now());
-        requestVolunteerRepository.save(assignment);
-        HelpRequest saved = helpRequestRepository.save(request);
+        HelpRequest saved = switch (normalizedStatus) {
+            case "REQUEST_COMPLETION", "COMPLETION_REQUESTED", "PENDING_COMPLETION", "COMPLETED" ->
+                    helpRequestService.requestCompletion(requestId, volunteer);
+            default -> helpRequestService.updateProgress(requestId, volunteer, normalizedStatus);
+        };
+        notifyRequester(saved,
+                "Volunteer update",
+                volunteer.getFullName() + " updated your request.");
         return requestViewMapper.toRequestMap(saved);
     }
 
@@ -438,7 +366,9 @@ public class VolunteerService {
     public List<Map<String, Object>> getActiveRequests(User user) {
         User volunteer = requireVolunteerUser(user);
         return helpRequestRepository.findByVolunteerIdOrderByCreatedAtDesc(volunteer.getId()).stream()
-                .filter(request -> REQUEST_ACTIVE.equalsIgnoreCase(request.getStatus()))
+                .filter(request -> REQUEST_ASSIGNED.equalsIgnoreCase(request.getStatus())
+                        || REQUEST_ACTIVE.equalsIgnoreCase(request.getStatus())
+                        || REQUEST_COMPLETION_REQUESTED.equalsIgnoreCase(request.getStatus()))
                 .map(requestViewMapper::toRequestMap)
                 .toList();
     }
@@ -452,8 +382,7 @@ public class VolunteerService {
     }
 
     public HelpRequest completeLegacyRequest(String requestId, User user) {
-        updateRequestProgress(requestId, user, "COMPLETED");
-        return getRequest(requestId);
+        return helpRequestService.requestCompletion(requestId, user);
     }
 
     private HelpRequest getRequest(String requestId) {
@@ -499,10 +428,7 @@ public class VolunteerService {
             if (!StringUtils.hasText(value)) {
                 continue;
             }
-            if (!ALLOWED_CATEGORIES.contains(value)) {
-                throw new IllegalArgumentException("Unsupported volunteer category: " + category);
-            }
-            normalized.add(value);
+            normalized.add(VolunteerCategory.canonicalize(value));
         }
         return new ArrayList<>(normalized);
     }
@@ -510,64 +436,95 @@ public class VolunteerService {
     private String normalizeProgressStatus(String status) {
         String normalized = safeUpper(status);
         if (!ALLOWED_PROGRESS.contains(normalized)) {
-            throw new IllegalArgumentException("Request status must be ON_THE_WAY, REACHED, or COMPLETED.");
+            throw new IllegalArgumentException("Request status must be ON_THE_WAY, REACHED, HELPING, or COMPLETION_REQUESTED.");
         }
         return normalized;
     }
 
     private List<VolunteerMatch> findNearbyVolunteerMatches(HelpRequest request) {
         ensureRequestHasCoordinates(request);
-        List<User> candidates = userRepository.findByVolunteerTrueAndVerifiedTrue().stream()
-                .filter(candidate -> VOLUNTEER_ONLINE.equalsIgnoreCase(candidate.getVolunteerStatus()))
-                .filter(candidate -> hasLocation(candidate.getLatitude(), candidate.getLongitude()))
-                .filter(candidate -> request.getRequesterId() == null || !request.getRequesterId().equals(candidate.getId()))
-                .filter(candidate -> volunteerCanHandleCategory(candidate, request))
-                .toList();
-
         double primaryRadius = request.getDynamicRadiusKm() != null ? request.getDynamicRadiusKm() : 5.0;
         double relayRadius = request.getRelayRadiusKm() != null ? request.getRelayRadiusKm() : 10.0;
 
-        // Tier 1 (Direct) matches
-        List<VolunteerMatch> immediateMatches = filterMatchesByRadius(request, candidates, primaryRadius);
+        List<VolunteerMatch> immediateMatches = geospatialService.nearbyVolunteers(request, primaryRadius, 100).stream()
+                .map(this::toVolunteerMatch)
+                .filter(Objects::nonNull)
+                .filter(match -> volunteerCanHandleCategory(match.user(), request))
+                .toList();
         if (!immediateMatches.isEmpty()) {
             return immediateMatches;
         }
 
-        // Tier 2 (Relay/Network) matches - only highly rated "trusted" volunteers
-        List<User> trustedCandidates = candidates.stream()
-                .filter(c -> c.getRating() >= 4.5 && c.getRequestsHelped() > 5)
+        return geospatialService.nearbyVolunteers(request, relayRadius, 100).stream()
+                .map(this::toVolunteerMatch)
+                .filter(Objects::nonNull)
+                .filter(match -> volunteerCanHandleCategory(match.user(), request))
+                .filter(match -> match.user().getRating() >= 4.5 && match.user().getRequestsHelped() > 5)
                 .toList();
-                
-        return filterMatchesByRadius(request, trustedCandidates, relayRadius);
+    }
+
+    private List<VolunteerMatch> rankVolunteerMatches(HelpRequest request, List<VolunteerMatch> matches) {
+        if (matches == null || matches.isEmpty()) {
+            return List.of();
+        }
+        List<MlIntelligenceService.VolunteerCandidate> candidates = matches.stream()
+                .map(match -> mlIntelligenceService.candidateFor(request, match.user(), match.distanceKm()))
+                .toList();
+        List<MlIntelligenceService.RankedVolunteer> ranked = mlIntelligenceService.rankVolunteers(request, candidates);
+        if (ranked.isEmpty()) {
+            return matches;
+        }
+
+        Map<String, VolunteerMatch> byVolunteerId = new HashMap<>();
+        matches.forEach(match -> byVolunteerId.put(match.user().getId(), match));
+        List<VolunteerMatch> ordered = new ArrayList<>();
+        List<Map<String, Object>> rankingEvents = new ArrayList<>();
+        String modelVersion = ranked.get(0).modelVersion();
+        String rankingMode = ranked.get(0).rankingMode();
+
+        for (MlIntelligenceService.RankedVolunteer item : ranked) {
+            VolunteerMatch match = byVolunteerId.remove(item.userId());
+            if (match == null) continue;
+            ordered.add(match);
+            Map<String, Object> event = new HashMap<>();
+            event.put("userId", item.userId());
+            event.put("score", item.score());
+            event.put("rank", item.rank());
+            event.put("matchScore", item.matchScore());
+            rankingEvents.add(event);
+        }
+        ordered.addAll(byVolunteerId.values());
+        mlMatchingEventService.recordRanking(request.getId(), rankingEvents, modelVersion, rankingMode);
+        return ordered;
+    }
+
+    private VolunteerMatch toVolunteerMatch(NearbyVolunteerCandidate candidate) {
+        if (candidate == null || candidate.volunteerId() == null || candidate.distanceKm() == null) return null;
+        return userRepository.findById(candidate.volunteerId())
+                .filter(User::isVolunteer)
+                .filter(User::isVerified)
+                .filter(user -> "ACTIVE".equalsIgnoreCase(user.getAccountStatus()))
+                .filter(user -> VOLUNTEER_ONLINE.equalsIgnoreCase(user.getVolunteerStatus()))
+                .filter(user -> hasLocation(user.getLatitude(), user.getLongitude()))
+                .map(user -> new VolunteerMatch(user, candidate.distanceKm(), candidate.distanceKm() <= 5.0d ? 5.0d : 10.0d))
+                .orElse(null);
     }
 
     private VolunteerMatch ensureVolunteerCanHandleRequest(HelpRequest request, User volunteer) {
-        // [BYPASS FOR LOCAL TESTING] Skipping strict coordinate constraint
-        // ensureRequestHasCoordinates(request);
-        
-        // [BYPASS FOR LOCAL TESTING] Skipping category constraint
-        // if (!volunteerCanHandleCategory(volunteer, request)) {
-        //     throw new IllegalArgumentException("This request does not match your volunteer categories.");
-        // }
-        
-        // [BYPASS FOR LOCAL TESTING] Skipping volunteer location constraint
-        // if (!hasLocation(volunteer.getLatitude(), volunteer.getLongitude())) {
-        //     throw new IllegalArgumentException("Update your volunteer location before accepting requests.");
-        // }
-        
-        double distanceKm = 1.0; // Default mocked distance for testing
-        if (hasLocation(request.getLatitude(), request.getLongitude()) && hasLocation(volunteer.getLatitude(), volunteer.getLongitude())) {
-             distanceKm = distanceBetween(request.getLatitude(), request.getLongitude(), volunteer.getLatitude(), volunteer.getLongitude());
+        ensureRequestHasCoordinates(request);
+        if (!volunteerCanHandleCategory(volunteer, request)) {
+            throw new IllegalArgumentException("This request does not match your volunteer categories or skills.");
         }
-        
-        // [BYPASS FOR LOCAL TESTING] Skipping 10km radius constraint
-        // if (distanceKm > 10.0d) {
-        //     logger.warn("User {} is too far ({}) from request {}", volunteer.getId(), distanceKm, request.getId());
-        //     throw new IllegalArgumentException("This request is outside the volunteer radius.");
-        // }
-        
+        if (!hasLocation(volunteer.getLatitude(), volunteer.getLongitude())) {
+            throw new IllegalArgumentException("Update your volunteer location before accepting requests.");
+        }
+        double distanceKm = distanceBetween(request.getLatitude(), request.getLongitude(), volunteer.getLatitude(), volunteer.getLongitude());
         double primaryRadius = request.getDynamicRadiusKm() != null ? request.getDynamicRadiusKm() : 5.0;
         double relayRadius = request.getRelayRadiusKm() != null ? request.getRelayRadiusKm() : 10.0;
+        if (distanceKm > relayRadius) {
+            logger.warn("User {} is too far from request {}", volunteer.getId(), request.getId());
+            throw new IllegalArgumentException("This request is outside the volunteer radius.");
+        }
         
         return new VolunteerMatch(volunteer, distanceKm, distanceKm <= primaryRadius ? primaryRadius : relayRadius);
     }
@@ -614,15 +571,21 @@ public class VolunteerService {
     private String mapRequestCategoryToVolunteerCategory(String requestCategory) {
         String normalized = safeUpper(requestCategory);
         if (normalized.contains("BLOOD")) {
-            return "BLOOD";
+            return VolunteerCategory.BLOOD_DONATION.name();
         }
         if (normalized.contains("MEDICAL")) {
-            return "MEDICAL";
+            return VolunteerCategory.MEDICAL.name();
         }
         if (normalized.contains("FOOD")) {
-            return "FOOD";
+            return VolunteerCategory.FOOD.name();
         }
-        return "GENERAL";
+        if (normalized.contains("TRANSPORT")) {
+            return VolunteerCategory.TRANSPORT.name();
+        }
+        if (normalized.contains("EMERGENCY") || normalized.contains("CRITICAL")) {
+            return VolunteerCategory.EMERGENCY.name();
+        }
+        return VolunteerCategory.GENERAL.name();
     }
 
     private boolean isBloodCompatible(String required, String donor) {
@@ -674,19 +637,30 @@ public class VolunteerService {
         if (!StringUtils.hasText(request.getRequesterId())) {
             return;
         }
-        userRepository.findById(request.getRequesterId()).ifPresent(user -> sendNotification(user, title, body));
+        userRepository.findById(request.getRequesterId()).ifPresent(user ->
+                sendNotification(user, NotificationType.REQUEST_PROGRESS_UPDATED, title, body, request));
     }
 
-    private void sendNotification(User user, String title, String body) {
-        if (user == null || !StringUtils.hasText(user.getNotificationToken())) {
-            logger.debug("Skipping push notification because no Firebase token is stored for userId={}.", user != null ? user.getId() : null);
+    private void sendNotification(User user, NotificationType type, String title, String body, HelpRequest request) {
+        if (user == null) {
             return;
         }
 
         try {
-            firebaseService.sendNotification(user.getNotificationToken(), title, body);
+            notificationService.notifyUser(NotificationService.NotificationCommand.builder()
+                    .recipientUserId(user.getId())
+                    .type(type)
+                    .category(NotificationCategory.REQUEST)
+                    .priority(request != null && "CRITICAL".equalsIgnoreCase(request.getUrgency()) ? NotificationPriority.URGENT : NotificationPriority.NORMAL)
+                    .title(title)
+                    .body(body)
+                    .entityType("HELP_REQUEST")
+                    .entityId(request == null ? null : request.getId())
+                    .actionUrl(request == null ? null : "/request/" + request.getId())
+                    .deduplicationKey(type + ":" + (request == null ? "unknown" : request.getId()) + ":" + user.getId())
+                    .build());
         } catch (RuntimeException exception) {
-            logger.warn("Failed to send volunteer notification to userId={}: {}", user.getId(), exception.getMessage());
+            logger.warn("Failed to queue volunteer notification for userId={}: {}", user.getId(), exception.getMessage());
         }
     }
 

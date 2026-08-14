@@ -2,8 +2,10 @@ package com.hvhn.backend.model;
 
 import com.hvhn.backend.model.enums.ChatMessageType;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 @Document(collection = "chat_messages")
+@CompoundIndex(name = "uk_chat_sender_client_message", def = "{'senderId': 1, 'clientMessageId': 1}", unique = true, sparse = true)
 public class ChatMessage {
     @Id
     private String id;
@@ -21,6 +24,8 @@ public class ChatMessage {
     private String senderName;
     private String avatarInitial;
     private String content;
+    @Field(write = Field.Write.NON_NULL)
+    private String clientMessageId;
 
     @Indexed
     private String roomId;
@@ -30,6 +35,8 @@ public class ChatMessage {
 
     private ChatMessageType messageType = ChatMessageType.CHAT;
     private boolean read;
+    private boolean deletedForEveryone;
+    private LocalDateTime deletedAt;
     
     // Advanced features
     private String replyToMessageId;
@@ -50,6 +57,9 @@ public class ChatMessage {
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
 
+    public String getClientMessageId() { return clientMessageId; }
+    public void setClientMessageId(String clientMessageId) { this.clientMessageId = clientMessageId; }
+
     public String getRoomId() { return roomId; }
     public void setRoomId(String roomId) { this.roomId = roomId; }
 
@@ -61,6 +71,12 @@ public class ChatMessage {
 
     public boolean isRead() { return read; }
     public void setRead(boolean read) { this.read = read; }
+
+    public boolean isDeletedForEveryone() { return deletedForEveryone; }
+    public void setDeletedForEveryone(boolean deletedForEveryone) { this.deletedForEveryone = deletedForEveryone; }
+
+    public LocalDateTime getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
 
     public String getReplyToMessageId() { return replyToMessageId; }
     public void setReplyToMessageId(String replyToMessageId) { this.replyToMessageId = replyToMessageId; }

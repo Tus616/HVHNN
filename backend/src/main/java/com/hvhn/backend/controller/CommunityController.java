@@ -2,50 +2,54 @@ package com.hvhn.backend.controller;
 
 import com.hvhn.backend.dto.CommunityRequestCreateRequest;
 import com.hvhn.backend.dto.CommunityUpsertRequest;
+import com.hvhn.backend.dto.DirectChatRoomRequest;
 import com.hvhn.backend.dto.MemberRoleUpdateRequest;
-import com.hvhn.backend.model.Community;
-import com.hvhn.backend.model.Member;
-import com.hvhn.backend.model.Request;
-import com.hvhn.backend.model.User;
-import com.hvhn.backend.model.enums.CommunityCategory;
-import com.hvhn.backend.model.enums.RequestStatus;
-import com.hvhn.backend.model.enums.RequestUrgency;
-import com.hvhn.backend.service.CommunityService;
+import com.hvhn.backend.model.*;
+import com.hvhn.backend.service.*;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.NoSuchElementException;
 
 @RestController
 @RequestMapping({"/api/communities", "/communities"})
 public class CommunityController {
 
     private final CommunityService communityService;
-    private final com.hvhn.backend.service.HelpRequestService helpRequestService;
-    private final com.hvhn.backend.service.RequestViewMapper requestViewMapper;
+    private final CommunityQuestionService questionService;
+    private final CommunityCampaignService campaignService;
+    private final AnnouncementService announcementService;
+    private final ChatService chatService;
+    private final RequestViewMapper requestViewMapper;
+    private final CommunityPermissionService permissions;
 
-    public CommunityController(CommunityService communityService, 
-                               com.hvhn.backend.service.HelpRequestService helpRequestService,
-                               com.hvhn.backend.service.RequestViewMapper requestViewMapper) {
+    public CommunityController(CommunityService communityService,
+                               CommunityQuestionService questionService,
+                               CommunityCampaignService campaignService,
+                               AnnouncementService announcementService,
+                               ChatService chatService,
+                               RequestViewMapper requestViewMapper,
+                               CommunityPermissionService permissions) {
         this.communityService = communityService;
-        this.helpRequestService = helpRequestService;
+        this.questionService = questionService;
+        this.campaignService = campaignService;
+        this.announcementService = announcementService;
+        this.chatService = chatService;
         this.requestViewMapper = requestViewMapper;
+        this.permissions = permissions;
     }
 
     @GetMapping
-    public ResponseEntity<List<Map<String, Object>>> getAllCommunities(
-            @RequestParam(required = false) String category
+    public ResponseEntity<List<Map<String, Object>>> listCommunities(
+            @RequestParam Map<String, String> filters,
+            @AuthenticationPrincipal User currentUser
     ) {
-        List<Community> communities = communityService.getAllCommunities(parseCategory(category));
-        return ResponseEntity.ok(communities.stream().map(this::mapCommunity).toList());
+        return ResponseEntity.ok(communityService.discover(filters, currentUser));
     }
 
     @PostMapping
@@ -54,12 +58,15 @@ public class CommunityController {
             @AuthenticationPrincipal User currentUser
     ) {
         Community community = communityService.createCommunity(request, currentUser);
-        return ResponseEntity.status(HttpStatus.CREATED).body(mapCommunity(community));
+        return ResponseEntity.status(HttpStatus.CREATED).body(communityService.toCommunitySummary(community, currentUser));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getCommunity(@PathVariable String id) {
-        return ResponseEntity.ok(mapCommunity(communityService.getCommunity(id)));
+    public ResponseEntity<Map<String, Object>> getCommunity(
+            @PathVariable String id,
+            @AuthenticationPrincipal User currentUser
+    ) {
+        return ResponseEntity.ok(communityService.getCommunityDetail(id, currentUser));
     }
 
     @PutMapping("/{id}")
@@ -69,14 +76,11 @@ public class CommunityController {
             @AuthenticationPrincipal User currentUser
     ) {
         Community community = communityService.updateCommunity(id, request, currentUser);
-        return ResponseEntity.ok(mapCommunity(community));
+        return ResponseEntity.ok(communityService.toCommunitySummary(community, currentUser));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteCommunity(
-            @PathVariable String id,
-            @AuthenticationPrincipal User currentUser
-    ) {
+    public ResponseEntity<Void> archiveCommunity(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
         communityService.deleteCommunity(id, currentUser);
         return ResponseEntity.noContent().build();
     }
@@ -87,24 +91,34 @@ public class CommunityController {
             @RequestBody(required = false) Map<String, String> payload,
             @AuthenticationPrincipal User currentUser
     ) {
-        String code = payload != null ? payload.get("code") : null;
-        Member member = communityService.joinCommunity(id, currentUser, code);
-        return ResponseEntity.ok(mapMember(member));
+        String code = payload == null ? null : payload.get("code");
+        return ResponseEntity.ok(communityService.toMemberMap(communityService.joinCommunity(id, currentUser, code)));
     }
 
     @PostMapping("/{id}/leave")
-    public ResponseEntity<Map<String, String>> leaveCommunity(
+    public ResponseEntity<Map<String, String>> leaveCommunity(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        communityService.leaveCommunity(id, currentUser);
+        return ResponseEntity.ok(Map.of("message", "Left community successfully."));
+    }
+
+    @PostMapping("/{id}/ownership/transfer")
+    public ResponseEntity<Map<String, Object>> transferOwnership(
             @PathVariable String id,
+            @RequestBody Map<String, String> payload,
             @AuthenticationPrincipal User currentUser
     ) {
-        communityService.leaveCommunity(id, currentUser);
-        return ResponseEntity.ok(Map.of("message", "Left community successfully"));
+        Community community = communityService.transferOwnership(id, payload.get("newOwnerUserId"), currentUser);
+        return ResponseEntity.ok(communityService.toCommunitySummary(community, currentUser));
+    }
+
+    @GetMapping("/{id}/dashboard")
+    public ResponseEntity<Map<String, Object>> dashboard(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(communityService.dashboard(id, currentUser));
     }
 
     @GetMapping("/{id}/members")
-    public ResponseEntity<List<Map<String, Object>>> getMembers(@PathVariable String id) {
-        List<Member> members = communityService.getMembers(id);
-        return ResponseEntity.ok(members.stream().map(this::mapMember).toList());
+    public ResponseEntity<List<Map<String, Object>>> members(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(communityService.getMembers(id, currentUser).stream().map(communityService::toMemberMap).toList());
     }
 
     @PutMapping("/{id}/members/{memberId}/role")
@@ -114,75 +128,40 @@ public class CommunityController {
             @RequestBody MemberRoleUpdateRequest payload,
             @AuthenticationPrincipal User currentUser
     ) {
-        Member member = communityService.updateMemberRole(id, memberId, payload, currentUser);
-        return ResponseEntity.ok(mapMember(member));
+        return ResponseEntity.ok(communityService.toMemberMap(communityService.updateMemberRole(id, memberId, payload, currentUser)));
+    }
+
+    @PostMapping("/{id}/members/{memberId}/approve")
+    public ResponseEntity<Map<String, Object>> approveMember(@PathVariable String id, @PathVariable String memberId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(communityService.toMemberMap(communityService.approveMembership(id, memberId, currentUser)));
+    }
+
+    @PostMapping("/{id}/members/{memberId}/reject")
+    public ResponseEntity<Map<String, Object>> rejectMember(@PathVariable String id, @PathVariable String memberId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(communityService.toMemberMap(communityService.rejectMembership(id, memberId, currentUser)));
     }
 
     @DeleteMapping("/{id}/members/{memberId}")
-    public ResponseEntity<Void> removeMember(
-            @PathVariable String id,
-            @PathVariable String memberId,
-            @AuthenticationPrincipal User currentUser
-    ) {
+    public ResponseEntity<Void> removeMember(@PathVariable String id, @PathVariable String memberId, @AuthenticationPrincipal User currentUser) {
         communityService.removeMember(id, memberId, currentUser);
         return ResponseEntity.noContent().build();
     }
 
-    @PostMapping("/{id}/broadcast")
-    public ResponseEntity<Map<String, String>> broadcastMessage(
-            @PathVariable String id,
-            @RequestBody Map<String, String> payload,
-            @AuthenticationPrincipal User currentUser
-    ) {
-        communityService.broadcastMessage(id, payload.get("content"), currentUser);
-        return ResponseEntity.ok(Map.of("message", "Broadcast sent successfully"));
+    @PostMapping("/{id}/members/{memberId}/message")
+    public ResponseEntity<?> messageMember(@PathVariable String id, @PathVariable String memberId, @AuthenticationPrincipal User currentUser) {
+        permissions.requireMember(currentUser, id);
+        Member target = communityService.getMembers(id, currentUser).stream()
+                .filter(member -> member.getId().equals(memberId) || member.getUserId().equals(memberId))
+                .findFirst()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Member not found."));
+        DirectChatRoomRequest request = new DirectChatRoomRequest();
+        request.setParticipantId(target.getUserId());
+        return ResponseEntity.ok(chatService.createOrGetDirectRoom(currentUser, request));
     }
 
-
     @GetMapping("/{id}/requests")
-    public ResponseEntity<List<Map<String, Object>>> getCommunityRequests(
-            @PathVariable String id,
-            @RequestParam(required = false) String urgency,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String location,
-            @RequestParam(required = false) String search,
-            @AuthenticationPrincipal User currentUser
-    ) {
-        if (currentUser == null) {
-            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
-        }
-
-        // Check membership
-        if (!communityService.isMember(id, currentUser.getId())) {
-            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "Only community members can view requests");
-        }
-        // Fetch legacy requests
-        List<Request> legacyRequests = communityService.getRequests(
-                id,
-                parseUrgency(urgency),
-                parseStatus(status),
-                location,
-                search
-        );
-        
-        // Fetch new unified requests
-        List<com.hvhn.backend.model.HelpRequest> unifiedRequests = helpRequestService.getRequestsByCommunity(id);
-        
-        // Combine them
-        List<Map<String, Object>> combined = new ArrayList<>();
-        combined.addAll(legacyRequests.stream().map(this::mapRequest).toList());
-        combined.addAll(unifiedRequests.stream().map(requestViewMapper::toRequestMap).toList());
-        
-        // Sort by date (descending)
-        combined.sort((a, b) -> {
-            String dateA = (String) a.get("createdAt");
-            String dateB = (String) b.get("createdAt");
-            if (dateA == null) return 1;
-            if (dateB == null) return -1;
-            return dateB.compareTo(dateA);
-        });
-
-        return ResponseEntity.ok(combined);
+    public ResponseEntity<List<Map<String, Object>>> communityRequests(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(communityService.getUnifiedRequests(id, currentUser).stream().map(requestViewMapper::toRequestMap).toList());
     }
 
     @PostMapping("/{id}/requests")
@@ -191,89 +170,118 @@ public class CommunityController {
             @Valid @RequestBody CommunityRequestCreateRequest request,
             @AuthenticationPrincipal User currentUser
     ) {
-        com.hvhn.backend.dto.HelpRequestDTO unifiedDto = new com.hvhn.backend.dto.HelpRequestDTO();
-        unifiedDto.setTitle(request.getTitle());
-        unifiedDto.setDescription(request.getDescription());
-        unifiedDto.setAddress(request.getLocation());
-        unifiedDto.setUrgency(request.getUrgency() != null ? request.getUrgency().name() : "MEDIUM");
-        unifiedDto.setCommunityId(id);
-        
-        if (currentUser == null) {
-            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user required");
-        }
-
-        com.hvhn.backend.model.HelpRequest helpRequest = helpRequestService.createRequest(unifiedDto, currentUser);
-        return ResponseEntity.status(HttpStatus.CREATED).body(requestViewMapper.toRequestMap(helpRequest));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(requestViewMapper.toRequestMap(communityService.createUnifiedRequest(id, request, currentUser)));
     }
 
-    private Map<String, Object> mapCommunity(Community community) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", community.getId());
-        response.put("name", community.getName());
-        response.put("description", community.getDescription());
-        response.put("location", community.getLocation());
-        response.put("category", community.getCategory() != null ? community.getCategory().name().toLowerCase() : null);
-        response.put("memberIds", community.getMemberIds());
-        response.put("memberCount", communityService.getMemberCount(community.getId()));
-        response.put("requestCount", communityService.getRequestCount(community.getId()));
-        response.put("institutionDomain", community.getInstitutionDomain());
-        response.put("hasJoinCode", community.getJoinCode() != null && !community.getJoinCode().isEmpty());
-        response.put("createdAt", community.getCreatedAt() != null ? community.getCreatedAt().toString() : null);
-        response.put("updatedAt", community.getUpdatedAt() != null ? community.getUpdatedAt().toString() : null);
-        return response;
+    @GetMapping("/{id}/legacy-requests/report")
+    public ResponseEntity<Map<String, Object>> legacyRequestReport(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        permissions.requireAdmin(currentUser, id);
+        return ResponseEntity.ok(Map.of("communityId", id, "legacyCommunityRequestCount", communityService.getRequests(id, null, null, null, null).size()));
     }
 
-    private Map<String, Object> mapMember(Member member) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", member.getId());
-        response.put("userId", member.getUserId());
-        response.put("communityId", member.getCommunityId());
-        response.put("role", member.getRole() != null ? member.getRole().name() : null);
-        response.put("joinedAt", member.getJoinedAt() != null ? member.getJoinedAt().toString() : null);
-
-        // Fetch user details for the member
-        communityService.getUserById(member.getUserId()).ifPresent(user -> {
-            response.put("fullName", user.getFullName());
-            response.put("verificationLevel", user.getVerificationLevel().name());
-            response.put("profileImage", user.getProfileImage());
-        });
-
-        return response;
+    @GetMapping("/{id}/questions")
+    public ResponseEntity<List<CommunityQuestion>> questions(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.listQuestions(id, currentUser));
     }
 
-    private Map<String, Object> mapRequest(Request request) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", request.getId());
-        response.put("communityId", request.getCommunityId());
-        response.put("title", request.getTitle());
-        response.put("description", request.getDescription());
-        response.put("location", request.getLocation());
-        response.put("urgency", request.getUrgency() != null ? request.getUrgency().name() : null);
-        response.put("status", request.getStatus() != null ? request.getStatus().name() : null);
-        response.put("requestedBy", request.getRequestedBy());
-        response.put("createdAt", request.getCreatedAt() != null ? request.getCreatedAt().toString() : null);
-        response.put("updatedAt", request.getUpdatedAt() != null ? request.getUpdatedAt().toString() : null);
-        return response;
+    @PostMapping("/{id}/questions")
+    public ResponseEntity<CommunityQuestion> createQuestion(@PathVariable String id, @RequestBody Map<String, Object> payload, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(questionService.createQuestion(id, payload, currentUser));
     }
 
-    private CommunityCategory parseCategory(String category) {
-        if (category == null || category.isBlank()) {
-            return null;
-        }
-        return CommunityCategory.fromValue(category);
+    @GetMapping("/{id}/questions/{questionId}")
+    public ResponseEntity<Map<String, Object>> questionDetail(@PathVariable String id, @PathVariable String questionId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.getQuestion(id, questionId, currentUser));
     }
 
-    private RequestUrgency parseUrgency(String urgency) {
-        if (urgency == null || urgency.isBlank()) {
-            return null;
-        }
-        return RequestUrgency.fromValue(urgency);
+    @DeleteMapping("/{id}/questions/{questionId}")
+    public ResponseEntity<Void> deleteQuestion(@PathVariable String id, @PathVariable String questionId, @AuthenticationPrincipal User currentUser) {
+        questionService.deleteQuestion(id, questionId, currentUser);
+        return ResponseEntity.noContent().build();
     }
 
-    private RequestStatus parseStatus(String status) {
-        if (status == null || status.isBlank()) {
-            return null;
-        }
-        return RequestStatus.fromValue(status);
+    @PostMapping("/{id}/questions/{questionId}/answers")
+    public ResponseEntity<CommunityAnswer> createAnswer(@PathVariable String id, @PathVariable String questionId, @RequestBody Map<String, String> payload, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(questionService.createAnswer(id, questionId, payload, currentUser));
+    }
+
+    @PostMapping("/{id}/questions/{questionId}/upvote")
+    public ResponseEntity<CommunityQuestion> upvoteQuestion(@PathVariable String id, @PathVariable String questionId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.upvoteQuestion(id, questionId, currentUser));
+    }
+
+    @DeleteMapping("/{id}/questions/{questionId}/upvote")
+    public ResponseEntity<CommunityQuestion> removeQuestionVote(@PathVariable String id, @PathVariable String questionId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.removeQuestionVote(id, questionId, currentUser));
+    }
+
+    @PostMapping("/{id}/questions/{questionId}/answers/{answerId}/upvote")
+    public ResponseEntity<CommunityAnswer> upvoteAnswer(@PathVariable String id, @PathVariable String questionId, @PathVariable String answerId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.upvoteAnswer(id, questionId, answerId, currentUser));
+    }
+
+    @DeleteMapping("/{id}/questions/{questionId}/answers/{answerId}/upvote")
+    public ResponseEntity<CommunityAnswer> removeAnswerVote(@PathVariable String id, @PathVariable String questionId, @PathVariable String answerId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.removeAnswerVote(id, questionId, answerId, currentUser));
+    }
+
+    @PostMapping("/{id}/questions/{questionId}/answers/{answerId}/accept")
+    public ResponseEntity<CommunityAnswer> acceptAnswer(@PathVariable String id, @PathVariable String questionId, @PathVariable String answerId, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(questionService.acceptAnswer(id, questionId, answerId, currentUser));
+    }
+
+    @GetMapping("/{id}/campaigns")
+    public ResponseEntity<List<CommunityCampaign>> campaigns(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(campaignService.listCampaigns(id, currentUser));
+    }
+
+    @PostMapping("/{id}/campaigns")
+    public ResponseEntity<CommunityCampaign> createCampaign(@PathVariable String id, @RequestBody Map<String, Object> payload, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(campaignService.createCampaign(id, payload, currentUser));
+    }
+
+    @PostMapping("/{id}/campaigns/{campaignId}/contributions")
+    public ResponseEntity<CommunityContribution> contribute(@PathVariable String id, @PathVariable String campaignId, @RequestBody Map<String, Object> payload, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(campaignService.contribute(id, campaignId, payload, currentUser));
+    }
+
+    @PutMapping("/{id}/campaigns/{campaignId}/moderation")
+    public ResponseEntity<CommunityCampaign> moderateCampaign(@PathVariable String id, @PathVariable String campaignId, @RequestBody Map<String, String> payload, @AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(campaignService.moderateCampaign(id, campaignId, payload, currentUser));
+    }
+
+    @GetMapping("/{id}/announcements")
+    public ResponseEntity<List<Announcement>> announcements(@PathVariable String id, @AuthenticationPrincipal User currentUser) {
+        permissions.requireMember(currentUser, id);
+        return ResponseEntity.ok(announcementService.getAnnouncements(id));
+    }
+
+    @PostMapping("/{id}/announcements")
+    public ResponseEntity<Announcement> createAnnouncement(@PathVariable String id, @RequestBody Announcement announcement, @AuthenticationPrincipal User currentUser) {
+        permissions.requireAdmin(currentUser, id);
+        return ResponseEntity.status(HttpStatus.CREATED).body(announcementService.createAnnouncement(id, announcement, currentUser));
+    }
+
+    @DeleteMapping("/{id}/announcements/{announcementId}")
+    public ResponseEntity<Void> deleteAnnouncement(@PathVariable String id, @PathVariable String announcementId, @AuthenticationPrincipal User currentUser) {
+        permissions.requireAdmin(currentUser, id);
+        announcementService.deleteAnnouncement(id, announcementId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}/announcements/{announcementId}/pin")
+    public ResponseEntity<Announcement> togglePin(@PathVariable String id, @PathVariable String announcementId, @AuthenticationPrincipal User currentUser) {
+        permissions.requireAdmin(currentUser, id);
+        return ResponseEntity.ok(announcementService.togglePin(id, announcementId));
+    }
+
+    @PostMapping("/{id}/broadcast")
+    public ResponseEntity<Announcement> broadcast(@PathVariable String id, @RequestBody Map<String, String> payload, @AuthenticationPrincipal User currentUser) {
+        permissions.requireAdmin(currentUser, id);
+        Announcement announcement = new Announcement();
+        announcement.setTitle(payload.getOrDefault("title", "Community Announcement"));
+        announcement.setBody(payload.getOrDefault("content", payload.getOrDefault("body", "")));
+        return ResponseEntity.status(HttpStatus.CREATED).body(announcementService.createAnnouncement(id, announcement, currentUser));
     }
 }

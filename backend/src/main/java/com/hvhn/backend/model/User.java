@@ -4,6 +4,7 @@ import com.hvhn.backend.model.enums.VolunteerSkill;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 
@@ -15,12 +16,18 @@ import org.springframework.data.mongodb.core.index.GeoSpatialIndexType;
 import org.springframework.data.mongodb.core.index.GeoSpatialIndexed;
 
 @Document(collection = "users")
+@CompoundIndex(name = "idx_user_volunteer_onboarding", def = "{'isVolunteer': 1, 'onboardingCompleted': 1, 'accountStatus': 1}")
+@CompoundIndex(name = "idx_user_city_district_state", def = "{'city': 1, 'district': 1, 'state': 1}")
 public class User {
     @Id
     private String id;
 
     @Indexed(unique = true)
     private String email;
+    @Indexed(unique = true, sparse = true)
+    private String normalizedEmail;
+    @Indexed(unique = true, sparse = true)
+    private String firebaseUid;
 
     private String password;
     private String fullName;
@@ -28,10 +35,19 @@ public class User {
     private String profileImage;
     private Double latitude;
     private Double longitude;
-    @GeoSpatialIndexed(type = GeoSpatialIndexType.GEO_2DSPHERE)
+    @GeoSpatialIndexed(name = "idx_users_location_2dsphere", type = GeoSpatialIndexType.GEO_2DSPHERE)
     private GeoJsonPoint location;
     private String address;
+    private String city;
+    private String district;
+    private String state;
+    private String postalCode;
+    private String locationSource = "UNKNOWN";
+    private LocalDateTime locationUpdatedAt;
     private String role = "USER"; // USER, ADMIN, VOLUNTEER
+    private String authProvider = "PASSWORD";
+    private String accountStatus = "ACTIVE";
+    private boolean emailVerified = false;
     private int points = 0;
     private int requestsHelped = 0;
     private int requestsCreated = 0;
@@ -42,6 +58,7 @@ public class User {
     private boolean volunteer = false;
     private String volunteerStatus = "OFFLINE";
     private List<String> volunteerCategories = new ArrayList<>();
+    private LocalDateTime volunteerSetupCompletedAt;
     private String bloodGroup;
     private boolean isBloodDonor = false;
     private String bio;
@@ -66,6 +83,10 @@ public class User {
 
     @CreatedDate
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private boolean onboardingCompleted = false;
+    private LocalDateTime onboardingCompletedAt;
+    private int onboardingVersion = 1;
 
     public User() {}
 
@@ -81,6 +102,10 @@ public class User {
 
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public String getNormalizedEmail() { return normalizedEmail; }
+    public void setNormalizedEmail(String normalizedEmail) { this.normalizedEmail = normalizedEmail; }
+    public String getFirebaseUid() { return firebaseUid; }
+    public void setFirebaseUid(String firebaseUid) { this.firebaseUid = firebaseUid; }
 
     public String getPassword() { return password; }
     public void setPassword(String password) { this.password = password; }
@@ -102,9 +127,27 @@ public class User {
 
     public String getAddress() { return address; }
     public void setAddress(String address) { this.address = address; }
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
+    public String getState() { return state; }
+    public void setState(String state) { this.state = state; }
+    public String getPostalCode() { return postalCode; }
+    public void setPostalCode(String postalCode) { this.postalCode = postalCode; }
+    public String getLocationSource() { return locationSource; }
+    public void setLocationSource(String locationSource) { this.locationSource = locationSource; }
+    public LocalDateTime getLocationUpdatedAt() { return locationUpdatedAt; }
+    public void setLocationUpdatedAt(LocalDateTime locationUpdatedAt) { this.locationUpdatedAt = locationUpdatedAt; }
 
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public String getAuthProvider() { return authProvider; }
+    public void setAuthProvider(String authProvider) { this.authProvider = authProvider; }
+    public String getAccountStatus() { return accountStatus; }
+    public void setAccountStatus(String accountStatus) { this.accountStatus = accountStatus; }
+    public boolean isEmailVerified() { return emailVerified || verified; }
+    public void setEmailVerified(boolean emailVerified) { this.emailVerified = emailVerified; }
 
     public int getPoints() { return points; }
     public void setPoints(int points) { this.points = points; }
@@ -132,6 +175,8 @@ public class User {
 
     public List<String> getVolunteerCategories() { return volunteerCategories; }
     public void setVolunteerCategories(List<String> volunteerCategories) { this.volunteerCategories = volunteerCategories; }
+    public LocalDateTime getVolunteerSetupCompletedAt() { return volunteerSetupCompletedAt; }
+    public void setVolunteerSetupCompletedAt(LocalDateTime volunteerSetupCompletedAt) { this.volunteerSetupCompletedAt = volunteerSetupCompletedAt; }
 
     public int getTotalHelpCount() { return totalHelpCount; }
     public void setTotalHelpCount(int totalHelpCount) { this.totalHelpCount = totalHelpCount; }
@@ -141,6 +186,14 @@ public class User {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public boolean isOnboardingCompleted() { return onboardingCompleted; }
+    public void setOnboardingCompleted(boolean onboardingCompleted) { this.onboardingCompleted = onboardingCompleted; }
+    public LocalDateTime getOnboardingCompletedAt() { return onboardingCompletedAt; }
+    public void setOnboardingCompletedAt(LocalDateTime onboardingCompletedAt) { this.onboardingCompletedAt = onboardingCompletedAt; }
+    public int getOnboardingVersion() { return onboardingVersion; }
+    public void setOnboardingVersion(int onboardingVersion) { this.onboardingVersion = onboardingVersion; }
 
     public String getBloodGroup() { return bloodGroup; }
     public void setBloodGroup(String bloodGroup) { this.bloodGroup = bloodGroup; }

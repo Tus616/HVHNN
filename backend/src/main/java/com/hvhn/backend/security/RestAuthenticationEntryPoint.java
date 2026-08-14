@@ -45,7 +45,8 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
                         HttpStatus.UNAUTHORIZED.value(),
                         HttpStatus.UNAUTHORIZED.getReasonPhrase(),
                         "Authentication is required to access this resource",
-                        request.getRequestURI()
+                        request.getRequestURI(),
+                        String.valueOf(request.getAttribute("requestId"))
                 )
         );
     }

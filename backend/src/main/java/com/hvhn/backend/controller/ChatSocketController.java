@@ -6,6 +6,8 @@ import com.hvhn.backend.dto.PresenceUpdateRequest;
 import com.hvhn.backend.dto.PresenceView;
 import com.hvhn.backend.dto.TypingEventPayload;
 import com.hvhn.backend.dto.TypingEventView;
+import com.hvhn.backend.dto.UnreadUpdateResponse;
+import com.hvhn.backend.model.User;
 import com.hvhn.backend.service.ChatService;
 import jakarta.validation.Valid;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -29,14 +31,40 @@ public class ChatSocketController {
     @MessageMapping("/chat.send")
     public void sendMessage(@Valid @Payload ChatMessagePayload payload, Principal principal) {
         String userId = requireUserId(principal);
+        boolean duplicateClientMessage = chatService.hasMessageFromClientId(userId, payload.getClientMessageId());
         ChatMessageView message = chatService.handleIncomingMessage(userId, payload);
+        if (duplicateClientMessage) {
+            messagingTemplate.convertAndSendToUser(userId, "/queue/chat/messages", message);
+            return;
+        }
         messagingTemplate.convertAndSend("/topic/chat/" + payload.getRoomId(), message);
 
         for (String participantId : chatService.getParticipantIds(payload.getRoomId())) {
-            messagingTemplate.convertAndSend(
-                    "/topic/rooms/" + participantId,
-                    chatService.getRoomViewForUser(payload.getRoomId(), participantId)
-            );
+            ChatRoomViewAdapter roomView = new ChatRoomViewAdapter(chatService.getRoomViewForUser(payload.getRoomId(), participantId));
+            messagingTemplate.convertAndSend("/topic/rooms/" + participantId, roomView.value());
+            messagingTemplate.convertAndSendToUser(participantId, "/queue/chat/messages", message);
+            messagingTemplate.convertAndSendToUser(participantId, "/queue/chat/conversations", roomView.value());
+        }
+        for (var receiptEvent : chatService.getReceiptEventsForMessage(message.getId(), "DELIVERED", 0)) {
+            if (receiptEvent.getDeliveredAt() != null) {
+                messagingTemplate.convertAndSendToUser(userId, "/queue/chat/receipts", receiptEvent);
+            }
+        }
+    }
+
+    @MessageMapping("/chat.seen")
+    public void markSeen(@Payload ChatSeenPayload payload, Principal principal) {
+        String userId = requireUserId(principal);
+        UnreadUpdateResponse response = chatService.markSeen(new UserPrincipal(userId), payload.roomId(), payload.lastSeenMessageId());
+        for (String participantId : chatService.getParticipantIds(payload.roomId())) {
+            messagingTemplate.convertAndSendToUser(participantId, "/queue/chat/receipts", response);
+        }
+        for (var receiptEvent : chatService.getReceiptEventsForMessage(payload.lastSeenMessageId(), "SEEN", 0)) {
+            if (receiptEvent.getSeenAt() != null) {
+                for (String participantId : chatService.getParticipantIds(payload.roomId())) {
+                    messagingTemplate.convertAndSendToUser(participantId, "/queue/chat/receipts", receiptEvent);
+                }
+            }
         }
     }
 
@@ -57,5 +85,15 @@ public class ChatSocketController {
             throw new IllegalArgumentException("WebSocket authentication is required");
         }
         return principal.getName();
+    }
+
+    public record ChatSeenPayload(String roomId, String lastSeenMessageId) {}
+
+    private record ChatRoomViewAdapter(com.hvhn.backend.dto.ChatRoomView value) {}
+
+    private static class UserPrincipal extends User {
+        UserPrincipal(String id) {
+            setId(id);
+        }
     }
 }
