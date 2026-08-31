@@ -7,6 +7,9 @@ import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import ConfirmDialog from '../../components/admin/ConfirmDialog';
 import RequestDetailModal from '../../components/admin/RequestDetailModal';
 import { adminApi } from '../../services/adminApi';
+import { ErrorState } from '../../components/ui';
+import { formatDateTime } from '../../utils/displayFormat';
+import { normalizeApiError } from '../../utils/errors';
 
 const DEFAULT_FILTERS = {
   category: '',
@@ -24,6 +27,7 @@ export default function AdminRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [confirmation, setConfirmation] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -32,12 +36,13 @@ export default function AdminRequestsPage() {
       setLoading(true);
 
       try {
+        setError('');
         const response = await adminApi.getRequests(filters, user);
         if (!active) return;
         setRequestPage(response.data);
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin requests.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -71,7 +76,7 @@ export default function AdminRequestsPage() {
         await adminApi.closeRequest(request.id);
         setRequestPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === request.id ? { ...entry, status: 'RESOLVED' } : entry
           )),
         }));
@@ -80,15 +85,14 @@ export default function AdminRequestsPage() {
         await adminApi.flagRequest(request.id);
         setRequestPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === request.id ? { ...entry, flagged: true } : entry
           )),
         }));
         showToast({ type: 'warning', title: 'Request flagged', message: `${request.id} was marked for review.` });
       }
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Action failed', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Action failed', message: normalizeApiError(error, 'Please try again.').message });
     } finally {
       setConfirmation(null);
     }
@@ -96,6 +100,10 @@ export default function AdminRequestsPage() {
 
   if (loading && !requestPage) {
     return <AdminLoadingState label="Loading request management..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
   }
 
   return (
@@ -178,7 +186,7 @@ export default function AdminRequestsPage() {
                   {rows.map((request) => (
                     <tr key={request.id}>
                       <td>{request.id}</td>
-                      <td>{request.category}</td>
+                      <td><AdminStatusBadge value={request.category} /></td>
                       <td>
                         <AdminStatusBadge
                           value={request.urgency}
@@ -188,7 +196,7 @@ export default function AdminRequestsPage() {
                       <td><AdminStatusBadge value={request.status} /></td>
                       <td>{request.raisedBy}</td>
                       <td>{request.location}</td>
-                      <td>{new Date(request.createdAt).toLocaleString()}</td>
+                      <td>{formatDateTime(request.createdAt)}</td>
                       <td>
                         <div className="admin-row-actions">
                           <button type="button" className="admin-btn admin-btn-secondary" onClick={() => setSelectedRequest(request)}>

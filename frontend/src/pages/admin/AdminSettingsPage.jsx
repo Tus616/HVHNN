@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import AdminLoadingState from '../../components/admin/AdminLoadingState';
 import { adminApi } from '../../services/adminApi';
+import { ErrorState } from '../../components/ui';
+import { humanizeEnum } from '../../utils/displayFormat';
+import { normalizeApiError } from '../../utils/errors';
 
 export default function AdminSettingsPage() {
   const { user, showToast } = useOutletContext();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
@@ -22,12 +26,13 @@ export default function AdminSettingsPage() {
       setLoading(true);
 
       try {
+        setError('');
         const response = await adminApi.getSettings(user);
         if (!active) return;
         setSettings(response.data);
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin settings.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -40,8 +45,16 @@ export default function AdminSettingsPage() {
     };
   }, [user]);
 
-  if (loading || !settings) {
+  if (loading) {
     return <AdminLoadingState label="Loading settings..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
+  }
+
+  if (!settings) {
+    return <ErrorState message="Admin settings are unavailable." />;
   }
 
   async function handlePasswordSave(event) {
@@ -64,8 +77,7 @@ export default function AdminSettingsPage() {
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
       showToast({ type: 'success', title: 'Password updated', message: 'Your admin password was updated successfully.' });
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Could not update password', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Could not update password', message: normalizeApiError(error, 'Please try again.').message });
     } finally {
       setSavingPassword(false);
     }
@@ -87,8 +99,7 @@ export default function AdminSettingsPage() {
       await adminApi.updateNotificationPreferences(nextPreferences);
       showToast({ type: 'success', title: 'Preferences saved', message: 'Notification settings updated.' });
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Save failed', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Save failed', message: normalizeApiError(error, 'Please try again.').message });
     } finally {
       setSavingPreferences(false);
     }
@@ -120,7 +131,7 @@ export default function AdminSettingsPage() {
             </div>
             <div>
               <span className="admin-detail-label">Role</span>
-              <p>{settings.profile.role.replace(/_/g, ' ')}</p>
+              <p>{humanizeEnum(settings.profile.role)}</p>
             </div>
             <div className="admin-detail-span-two">
               <span className="admin-detail-label">Email</span>

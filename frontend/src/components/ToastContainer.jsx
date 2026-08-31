@@ -12,7 +12,7 @@ export default function ToastContainer() {
   const { toasts, removeToast } = useNotifications();
 
   return (
-    <div className="toast-container">
+    <div className="toast-container" role="status" aria-live="polite" aria-relevant="additions removals">
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast toast-${toast.type}`}>
           <div className="toast-icon">
@@ -25,6 +25,7 @@ export default function ToastContainer() {
           <button 
             onClick={() => removeToast(toast.id)} 
             className="ml-auto p-1 hover:bg-black/5 rounded-full transition-colors"
+            aria-label={`Dismiss ${toast.title || 'notification'}`}
           >
             <X size={14} />
           </button>

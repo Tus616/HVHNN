@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import apiService from '../services/api';
+import { Avatar } from '../components/ui';
 
 export default function Leaderboard() {
   const { user } = useAuth();
@@ -16,7 +17,7 @@ export default function Leaderboard() {
     setLoading(true);
     try {
       const res = await apiService.getLeaderboard(timeRange);
-      setUsers(res.data);
+      setUsers(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -29,8 +30,9 @@ export default function Leaderboard() {
   const badgeIcon = { Hero: '🦸', Champion: '🏆', Helper: '🤝', Volunteer: '💪', Newcomer: '🌱' };
   const rankIcons = ['🥇', '🥈', '🥉'];
   
-  const myRank = users.findIndex(u => u.id === user?.userId) + 1;
-  const myData = users.find(u => u.id === user?.userId);
+  const usersArray = Array.isArray(users) ? users : [];
+  const myRank = usersArray.findIndex(u => u.id === user?.userId) + 1;
+  const myData = usersArray.find(u => u.id === user?.userId);
 
   return (
     <div className="animate-in">
@@ -66,9 +68,7 @@ export default function Leaderboard() {
             <div style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '4px' }}>Your Rank</div>
             <div style={{ fontSize: '2.5rem', fontWeight: 900, color: 'var(--text-primary)' }}>#{myRank}</div>
           </div>
-          <div className="profile-avatar" style={{ width: '64px', height: '64px', fontSize: '1.5rem' }}>
-            {myData.fullName?.charAt(0)}
-          </div>
+          <Avatar name={myData.fullName || myData.email} src={myData.avatarUrl || myData.profileImage} size="xl" />
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{myData.fullName}</div>
             <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
@@ -84,15 +84,15 @@ export default function Leaderboard() {
 
       {/* Top 3 */}
       <div className="grid-3" style={{ marginBottom: '32px' }}>
-        {users.slice(0, 3).map((u, i) => (
+        {usersArray.slice(0, 3).map((u, i) => (
           <div key={u.id} className="stat-card" style={{ 
             position: 'relative',
             background: i === 0 ? 'rgba(245,158,11,0.05)' : 'var(--bg-card)',
             border: i === 0 ? '1px solid rgba(245,158,11,0.3)' : undefined 
           }}>
             <div style={{ position: 'absolute', top: '12px', left: '12px', fontSize: '1.5rem' }}>{rankIcons[i]}</div>
-            <div className="profile-avatar" style={{ width: '64px', height: '64px', fontSize: '1.5rem', margin: '20px auto 12px' }}>
-              {u.fullName?.charAt(0)}
+            <div style={{ margin: '20px auto 12px', width: 'max-content' }}>
+              <Avatar name={u.fullName || u.email} src={u.avatarUrl || u.profileImage} size="xl" />
             </div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{u.fullName}</div>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '12px' }}>{u.communityName || 'Independant'}</div>
@@ -123,14 +123,12 @@ export default function Leaderboard() {
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {usersArray.map((u, i) => (
               <tr key={u.id} style={{ background: u.id === user?.userId ? 'rgba(99, 102, 241, 0.05)' : undefined }}>
                 <td className="rank" style={{ padding: '16px 24px' }}>{i < 3 ? rankIcons[i] : `#${i + 1}`}</td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div className="profile-avatar" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>
-                      {u.fullName?.charAt(0)}
-                    </div>
+                    <Avatar name={u.fullName || u.email} src={u.avatarUrl || u.profileImage} size="sm" />
                     <div>
                       <div className="user-name" style={{ fontWeight: u.id === user?.userId ? 700 : 500 }}>{u.fullName}</div>
                       {u.id === user?.userId && <div style={{ fontSize: '0.7rem', color: 'var(--accent-primary)' }}>You</div>}

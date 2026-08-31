@@ -6,6 +6,8 @@ public class PresenceView {
     private String userId;
     private String fullName;
     private String avatarInitial;
+    private String avatarUrl;
+    private String profileImage;
     private PresenceStatus status;
     private String lastSeen;
 
@@ -17,6 +19,10 @@ public class PresenceView {
 
     public String getAvatarInitial() { return avatarInitial; }
     public void setAvatarInitial(String avatarInitial) { this.avatarInitial = avatarInitial; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public String getProfileImage() { return profileImage; }
+    public void setProfileImage(String profileImage) { this.profileImage = profileImage; }
 
     public PresenceStatus getStatus() { return status; }
     public void setStatus(PresenceStatus status) { this.status = status; }

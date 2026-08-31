@@ -1,4 +1,4 @@
-# Setup script for HVHN project
+# Setup script for Sahay project
 
 Write-Host "Setting up environment files..." -ForegroundColor Cyan
 

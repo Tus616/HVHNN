@@ -1,364 +1,370 @@
-// FEATURE: Community Management Tools - IMPLEMENTED
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Megaphone, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useNotifications } from '../context/NotificationContext';
 import apiService from '../services/api';
+import {
+  Alert,
+  Avatar,
+  Badge,
+  Button,
+  Card,
+  ConfirmationDialog,
+  EmptyState,
+  ErrorState,
+  FormField,
+  Input,
+  PageHeader,
+  RoleBadge,
+  Select,
+  Skeleton,
+  Tabs,
+  Textarea,
+} from '../components/ui';
 
-const COMMUNITY_TYPES = [
-  { value: 'COLLEGE', label: '🎓 College / University' },
-  { value: 'HOSPITAL', label: '🏥 Hospital / Clinic' },
-  { value: 'RESIDENTIAL', label: '🏘️ Residential Society' },
-  { value: 'CORPORATE', label: '🏢 Corporate / Office' },
-  { value: 'OTHER', label: '🏛️ Other Organization' },
-];
+const CATEGORY_OPTIONS = ['COLLEGE', 'HOSPITAL', 'RESIDENTIAL', 'CORPORATE', 'OTHER'];
+const VISIBILITY_OPTIONS = ['PUBLIC', 'PRIVATE', 'RESTRICTED'];
+const JOIN_POLICY_OPTIONS = ['OPEN', 'JOIN_CODE', 'EMAIL_DOMAIN', 'APPROVAL_REQUIRED', 'INVITE_ONLY'];
+const ROLE_OPTIONS = ['OWNER', 'ADMIN', 'MODERATOR', 'MEMBER'];
+
+function cleanError(error, fallback) {
+  const message = error?.response?.data?.message || error?.message || fallback;
+  if (/exception|java\.|stack|trace/i.test(message)) return fallback;
+  return message;
+}
+
+function readable(value) {
+  return String(value || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function canManageRole(currentRole, targetRole) {
+  const current = String(currentRole || '').toUpperCase();
+  const target = String(targetRole || '').toUpperCase();
+  if (target === 'OWNER') return false;
+  return ['OWNER', 'ADMIN'].includes(current);
+}
 
 export default function CommunityManage() {
   const { id } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { showToast } = useNotifications();
   const [community, setCommunity] = useState(null);
   const [members, setMembers] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [form, setForm] = useState({ name: '', type: 'COLLEGE', category: 'COLLEGE', description: '', address: '', city: '', district: '', state: '', visibility: 'PUBLIC', joinPolicy: 'OPEN', verificationCode: '', emailDomain: '' });
+  const [broadcast, setBroadcast] = useState({ title: '', message: '', urgency: 'MEDIUM' });
+  const [announcement, setAnnouncement] = useState({ title: '', body: '' });
+  const [activeTab, setActiveTab] = useState('general');
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [form, setForm] = useState({
-    name: '', type: 'COLLEGE', description: '', address: '', radiusKm: 5, verificationCode: '', emailDomain: '',
-  });
-  const [showDelete, setShowDelete] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState('');
-  const [activeTab, setActiveTab] = useState('settings');
-  const [broadcastForm, setBroadcastForm] = useState({ title: '', message: '', urgency: 'MEDIUM' });
-  const [broadcasting, setBroadcasting] = useState(false);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState('');
+  const [confirm, setConfirm] = useState(null);
+  const loadSeq = useRef(0);
+
+  const currentRole = community?.currentUserRole || user?.role;
+  const owner = String(currentRole || '').toUpperCase() === 'OWNER' || user?.isAdmin;
+  const admin = ['OWNER', 'ADMIN'].includes(String(currentRole || '').toUpperCase()) || user?.isAdmin;
+
+  const load = async () => {
+    const seq = ++loadSeq.current;
+    setLoading(true);
+    setError('');
+    try {
+      const [detailRes, memberRes, announcementRes] = await Promise.all([
+        apiService.getCommunityDetail(id),
+        apiService.getCommunityMembers(id).catch(() => ({ data: [] })),
+        apiService.getAnnouncements(id).catch(() => ({ data: [] })),
+      ]);
+      if (seq !== loadSeq.current) return;
+      const detail = detailRes.data?.community || detailRes.data;
+      setCommunity(detail);
+      setMembers(memberRes.data || []);
+      setAnnouncements(announcementRes.data || []);
+      setForm({
+        name: detail?.name || '',
+        type: detail?.type || detail?.category || 'COLLEGE',
+        category: detail?.category || detail?.type || 'COLLEGE',
+        description: detail?.description || '',
+        address: detail?.address || detail?.location || '',
+        city: detail?.city || '',
+        district: detail?.district || '',
+        state: detail?.state || '',
+        visibility: detail?.visibility || 'PUBLIC',
+        joinPolicy: detail?.joinPolicy || 'OPEN',
+        verificationCode: '',
+        emailDomain: detail?.emailDomain || '',
+      });
+    } catch (loadError) {
+      if (seq === loadSeq.current) setError(cleanError(loadError, 'Community management could not load.'));
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    loadCommunity();
+    setActiveTab('general');
+    load();
   }, [id]);
 
-  const loadCommunity = async () => {
-    try {
-      const [commRes, membersRes] = await Promise.all([
-        apiService.getCommunities(),
-        apiService.getCommunityMembers(parseInt(id, 10)),
-      ]);
-      const comm = commRes.data.find(c => c.id === parseInt(id, 10));
-      if (comm) {
-        setCommunity(comm);
-        setForm({
-          name: comm.name || '',
-          type: comm.type || 'COLLEGE',
-          description: comm.description || '',
-          address: comm.address || '',
-          radiusKm: comm.radiusKm || 5,
-          verificationCode: comm.verificationCode || '',
-          emailDomain: comm.emailDomain || '',
-        });
-      }
-      setMembers(membersRes.data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+  const visibleMembers = useMemo(() => members.filter((member) => String(member.status || 'ACTIVE').toUpperCase() !== 'REMOVED'), [members]);
+
+  const updateForm = (name, value) => {
+    setForm((current) => {
+      const next = { ...current, [name]: value };
+      if (name === 'type') next.category = value;
+      if (name === 'joinPolicy' && value !== 'JOIN_CODE') next.verificationCode = '';
+      if (name === 'joinPolicy' && value !== 'EMAIL_DOMAIN') next.emailDomain = '';
+      return next;
+    });
   };
 
-  const showToast = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (!form.name || !form.address) {
-      showToast('Name and address are required.', 'error');
+  const saveSettings = async (event) => {
+    event?.preventDefault();
+    if (!form.name.trim() || !form.address.trim()) {
+      showToast?.({ message: 'Name and location are required.', type: 'error' });
       return;
     }
-    setSaving(true);
+    setSaving('settings');
     try {
-      const res = await apiService.updateCommunity(parseInt(id, 10), form);
-      setCommunity(res.data);
-      showToast('Community settings updated! ✅');
-    } catch (err) {
-      showToast(err.message || 'Failed to save.', 'error');
+      const payload = {
+        ...form,
+        verificationCode: form.joinPolicy === 'JOIN_CODE' ? form.verificationCode : '',
+        emailDomain: form.joinPolicy === 'EMAIL_DOMAIN' ? form.emailDomain : '',
+      };
+      const response = await apiService.updateCommunity(id, payload);
+      setCommunity(response.data || community);
+      showToast?.({ message: 'Community settings updated.', type: 'success' });
+      await load();
+    } catch (saveError) {
+      showToast?.({ message: cleanError(saveError, 'Unable to save settings.'), type: 'error' });
     } finally {
-      setSaving(false);
+      setSaving('');
     }
   };
 
-  const handleDelete = async () => {
-    if (deleteConfirm !== community?.name) {
-      showToast('Type the community name exactly to confirm deletion.', 'error');
-      return;
-    }
+  const changeRole = async (member, role) => {
+    setSaving(`role-${member.id}`);
     try {
-      await apiService.deleteCommunity(parseInt(id, 10));
-      showToast('Community deleted.');
+      await apiService.updateCommunityMemberRole(id, member.id || member.userId, role);
+      showToast?.({ message: `${member.fullName || 'Member'} role updated.`, type: 'success' });
+      await load();
+    } catch (roleError) {
+      showToast?.({ message: cleanError(roleError, 'Unable to update this role.'), type: 'error' });
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const removeMember = async (member) => {
+    setSaving(`remove-${member.id}`);
+    try {
+      await apiService.removeCommunityMember(id, member.id || member.userId);
+      showToast?.({ message: `${member.fullName || 'Member'} removed.`, type: 'success' });
+      await load();
+    } catch (removeError) {
+      showToast?.({ message: cleanError(removeError, 'Unable to remove this member.'), type: 'error' });
+    } finally {
+      setSaving('');
+      setConfirm(null);
+    }
+  };
+
+  const sendBroadcast = async (event) => {
+    event.preventDefault();
+    if (!broadcast.title.trim() || !broadcast.message.trim()) return;
+    setSaving('broadcast');
+    try {
+      await apiService.broadcastCommunityMessage(id, { title: broadcast.title, content: broadcast.message, urgency: broadcast.urgency });
+      showToast?.({ message: 'Broadcast sent to community members.', type: 'success' });
+      setBroadcast({ title: '', message: '', urgency: 'MEDIUM' });
+    } catch (broadcastError) {
+      showToast?.({ message: cleanError(broadcastError, 'Unable to send broadcast.'), type: 'error' });
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const postAnnouncement = async (event) => {
+    event.preventDefault();
+    if (!announcement.title.trim() || !announcement.body.trim()) return;
+    setSaving('announcement');
+    try {
+      await apiService.createAnnouncement(id, announcement);
+      showToast?.({ message: 'Announcement posted.', type: 'success' });
+      setAnnouncement({ title: '', body: '' });
+      await load();
+    } catch (announcementError) {
+      showToast?.({ message: cleanError(announcementError, 'Unable to post announcement.'), type: 'error' });
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const deleteCommunity = async () => {
+    setSaving('delete');
+    try {
+      await apiService.deleteCommunity(id);
+      showToast?.({ message: 'Community deleted.', type: 'success' });
       navigate('/communities');
-    } catch (err) {
-      showToast(err.message || 'Failed to delete.', 'error');
+    } catch (deleteError) {
+      showToast?.({ message: cleanError(deleteError, 'Unable to delete this community.'), type: 'error' });
+      setSaving('');
+      setConfirm(null);
     }
   };
 
-  const handleRemoveMember = async (memberId, memberName) => {
-    if (!confirm(`Remove ${memberName} from this community?`)) return;
-    try {
-      await apiService.removeCommunityMember(parseInt(id, 10), memberId);
-      setMembers(prev => prev.filter(m => m.id !== memberId));
-      showToast(`${memberName} removed from community.`);
-    } catch (err) {
-      showToast(err.message || 'Failed to remove member.', 'error');
-    }
-  };
+  if (loading) return <div className="p7b-management"><Card><Skeleton lines={8} /></Card></div>;
+  if (error) return <ErrorState title="Management unavailable" message={error} onRetry={load} />;
+  if (!community) return <EmptyState title="Community not found" message="This management page is no longer available." actionLabel="Back to Communities" actionTo="/communities" />;
 
-  const handleBroadcast = async (e) => {
-    e.preventDefault();
-    if (!broadcastForm.title || !broadcastForm.message) {
-      showToast('Title and message are required.', 'error');
-      return;
-    }
-    setBroadcasting(true);
-    try {
-      await apiService.broadcastCommunityMessage(parseInt(id, 10), {
-        title: broadcastForm.title,
-        content: broadcastForm.message,
-        urgency: broadcastForm.urgency
-      });
-      showToast('Broadcast sent successfully to all members! 📢');
-      setBroadcastForm({ title: '', message: '', urgency: 'MEDIUM' });
-      setActiveTab('members');
-    } catch (err) {
-      showToast(err.message || 'Failed to send broadcast.', 'error');
-    } finally {
-      setBroadcasting(false);
-    }
-  };
-
-  if (loading) return <div className="loading"><div className="spinner" /></div>;
-  if (!community) return <div className="empty-state"><h3>Community not found</h3></div>;
+  const tabs = [
+    { id: 'general', label: 'General', content: null },
+    { id: 'access', label: 'Access', content: null },
+    { id: 'members', label: `Members (${visibleMembers.length})`, content: null },
+    { id: 'announcements', label: 'Announcements', content: null },
+    { id: 'ownership', label: 'Ownership', content: null },
+    { id: 'danger', label: 'Danger Zone', content: null },
+  ];
 
   return (
-    <div className="animate-in">
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+    <div className="p7b-management animate-in">
+      <Button type="button" variant="ghost" onClick={() => navigate(`/community/${id}`)}><ArrowLeft size={16} />Back to community</Button>
+      <PageHeader
+        eyebrow="Community management"
+        title={community.name}
+        description="Update visible community details, access rules, member roles, announcements, and protected actions."
+      />
 
-      <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/community/${id}`)} style={{ marginBottom: '20px' }}>
-        ← Back to Community
-      </button>
+      {!admin && <Alert variant="warning" title="Limited access">Some management actions may be unavailable if your role changed.</Alert>}
 
-      <div className="page-header">
-        <div>
-          <h1>⚙️ Manage {community.name}</h1>
-          <p style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
-            Edit settings, manage members, and configure verification
-          </p>
-        </div>
-      </div>
+      <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
-      <div className="feed-filters" style={{ marginBottom: '24px' }}>
-        <button className={`filter-btn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
-          ⚙️ Settings
-        </button>
-        <button className={`filter-btn ${activeTab === 'members' ? 'active' : ''}`} onClick={() => setActiveTab('members')}>
-          👥 Members ({members.length})
-        </button>
-        <button className={`filter-btn ${activeTab === 'broadcast' ? 'active' : ''}`} onClick={() => setActiveTab('broadcast')}>
-          📢 Broadcast
-        </button>
-        <button className={`filter-btn ${activeTab === 'verification' ? 'active' : ''}`} onClick={() => setActiveTab('verification')}>
-          🔐 Verification
-        </button>
-        <button className={`filter-btn ${activeTab === 'danger' ? 'active' : ''}`} onClick={() => setActiveTab('danger')}>
-          ⚠️ Danger Zone
-        </button>
-      </div>
-
-      {activeTab === 'settings' && (
-        <div className="card">
-          <h3 style={{ marginBottom: '20px', fontWeight: 700 }}>Community Settings</h3>
-          <form onSubmit={handleSave}>
-            <div className="form-group">
-              <label className="form-label">Community Name *</label>
-              <input type="text" className="form-input" value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })} required />
+      {activeTab === 'general' && (
+        <Card>
+          <form className="p7b-form-section" onSubmit={saveSettings}>
+            <div className="p7b-management-heading"><ShieldCheck size={20} /><h2>General settings</h2></div>
+            <FormField label="Community name"><Input value={form.name} onChange={(event) => updateForm('name', event.target.value)} /></FormField>
+            <FormField label="Type"><Select value={form.type} onChange={(event) => updateForm('type', event.target.value)}>{CATEGORY_OPTIONS.map((item) => <option key={item} value={item}>{readable(item)}</option>)}</Select></FormField>
+            <FormField label="Description"><Textarea rows={4} value={form.description} onChange={(event) => updateForm('description', event.target.value)} /></FormField>
+            <FormField label="Address or area"><Input value={form.address} onChange={(event) => updateForm('address', event.target.value)} /></FormField>
+            <div className="p7b-two-col">
+              <FormField label="City"><Input value={form.city} onChange={(event) => updateForm('city', event.target.value)} /></FormField>
+              <FormField label="District"><Input value={form.district} onChange={(event) => updateForm('district', event.target.value)} /></FormField>
+              <FormField label="State"><Input value={form.state} onChange={(event) => updateForm('state', event.target.value)} /></FormField>
             </div>
-            <div className="form-group">
-              <label className="form-label">Type</label>
-              <select className="form-select" value={form.type}
-                onChange={e => setForm({ ...form, type: e.target.value })}>
-                {COMMUNITY_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Description</label>
-              <textarea className="form-textarea" rows={3} value={form.description}
-                onChange={e => setForm({ ...form, description: e.target.value })} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Address *</label>
-              <input type="text" className="form-input" value={form.address}
-                onChange={e => setForm({ ...form, address: e.target.value })} required />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              <div className="form-group">
-                <label className="form-label">Coverage Radius (km)</label>
-                <input type="number" className="form-input" min="1" max="50"
-                  value={form.radiusKm} onChange={e => setForm({ ...form, radiusKm: e.target.value })} />
-              </div>
-            </div>
-            <div style={{ marginTop: '16px' }}>
-              <button type="submit" className="btn btn-primary" disabled={saving}>
-                {saving ? 'Saving...' : '💾 Save Settings'}
-              </button>
-            </div>
+            <Button type="submit" loading={saving === 'settings'}><Save size={16} />Save settings</Button>
           </form>
-        </div>
+        </Card>
+      )}
+
+      {activeTab === 'access' && (
+        <Card>
+          <form className="p7b-form-section" onSubmit={saveSettings}>
+            <div className="p7b-management-heading"><ShieldCheck size={20} /><h2>Access and join policy</h2></div>
+            <FormField label="Visibility"><Select value={form.visibility} onChange={(event) => updateForm('visibility', event.target.value)}>{VISIBILITY_OPTIONS.map((item) => <option key={item} value={item}>{readable(item)}</option>)}</Select></FormField>
+            <FormField label="Join policy"><Select value={form.joinPolicy} onChange={(event) => updateForm('joinPolicy', event.target.value)}>{JOIN_POLICY_OPTIONS.map((item) => <option key={item} value={item}>{readable(item)}</option>)}</Select></FormField>
+            {form.joinPolicy === 'JOIN_CODE' && <FormField label="New join code" hint="Leave blank to avoid exposing or changing the existing code."><Input value={form.verificationCode} onChange={(event) => updateForm('verificationCode', event.target.value.toUpperCase())} autoComplete="off" /></FormField>}
+            {form.joinPolicy === 'EMAIL_DOMAIN' && <FormField label="Allowed email domain"><Input value={form.emailDomain} onChange={(event) => updateForm('emailDomain', event.target.value.toLowerCase())} placeholder="example.edu" /></FormField>}
+            {form.joinPolicy === 'APPROVAL_REQUIRED' && <Alert title="Approval required">Members will see a pending state after submitting a join request.</Alert>}
+            {form.joinPolicy === 'INVITE_ONLY' && <Alert title="Invite only">The public join button is hidden for this community.</Alert>}
+            <Button type="submit" loading={saving === 'settings'}>Save access policy</Button>
+          </form>
+        </Card>
       )}
 
       {activeTab === 'members' && (
-        <div className="card">
-          <h3 style={{ marginBottom: '20px', fontWeight: 700 }}>Members ({members.length})</h3>
-          {members.length === 0 ? (
-            <div className="empty-state" style={{ padding: '40px 20px' }}>
-              <div style={{ fontSize: '3rem', marginBottom: '12px', opacity: 0.5 }}>👥</div>
-              <h3>No members data available</h3>
-              <p>Members will appear here once they join the community.</p>
-            </div>
-          ) : (
-            <div>
-              {members.map(m => (
-                <div key={m.id} className="member-list-item">
-                  <div className="member-list-info">
-                    <div className="member-list-avatar">{m.fullName?.charAt(0) || '?'}</div>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{m.fullName}</div>
-                      <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                        {m.email || 'No email'} • {m.roleLabel || 'Member'}
-                      </div>
-                    </div>
-                  </div>
-                  <button className="btn btn-danger btn-sm" onClick={() => handleRemoveMember(m.id, m.fullName)}>
-                    Remove
-                  </button>
+        <Card className="p7b-form-section">
+          <div className="p7b-management-heading"><Users size={20} /><h2>Member controls</h2></div>
+          {visibleMembers.length === 0 ? <EmptyState title="No members yet" message="Members will appear here after joining." /> : visibleMembers.map((member) => {
+            const self = String(member.userId || member.id) === String(user?.userId || user?.id);
+            const targetOwner = String(member.role || '').toUpperCase() === 'OWNER';
+            return (
+              <div key={member.id || member.userId} className="p7b-member-row">
+                <div className="p7b-member-line">
+                  <Avatar name={member.fullName || member.name || 'Member'} src={member.profileImage || member.avatarUrl} />
+                  <span><strong>{member.fullName || member.name || 'Member'}</strong><small>Status: {readable(member.status || 'ACTIVE')}</small></span>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'broadcast' && (
-        <div className="card">
-          <h3 style={{ marginBottom: '12px', fontWeight: 700 }}>📢 Community Broadcast</h3>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', fontSize: '0.9rem' }}>
-            Send a mass notification to every member of this community. Use this for emergencies, events, or important announcements.
-          </p>
-          <form onSubmit={handleBroadcast}>
-            <div className="form-group">
-              <label className="form-label">Broadcast Title *</label>
-              <input type="text" className="form-input" placeholder="e.g., Blood Donation Camp, Water Supply Update"
-                value={broadcastForm.title} onChange={e => setBroadcastForm({ ...broadcastForm, title: e.target.value })} required />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Message Content *</label>
-              <textarea className="form-textarea" rows={4} placeholder="Type your message here..."
-                value={broadcastForm.message} onChange={e => setBroadcastForm({ ...broadcastForm, message: e.target.value })} required />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Urgency</label>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(u => (
-                  <button 
-                    key={u}
-                    type="button"
-                    className={`btn btn-sm ${broadcastForm.urgency === u ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setBroadcastForm({ ...broadcastForm, urgency: u })}
-                  >
-                    {u}
-                  </button>
-                ))}
+                <RoleBadge role={member.role || 'MEMBER'} />
+                {canManageRole(currentRole, member.role) && !self && !targetOwner ? (
+                  <Select value={member.role || 'MEMBER'} onChange={(event) => changeRole(member, event.target.value)} disabled={saving === `role-${member.id}`}>
+                    {ROLE_OPTIONS.filter((role) => role !== 'OWNER').map((role) => <option key={role} value={role}>{readable(role)}</option>)}
+                  </Select>
+                ) : <Badge variant="default">{self ? 'You' : targetOwner ? 'Owner protected' : 'Role locked'}</Badge>}
+                {admin && !self && !targetOwner && (
+                  <Button type="button" variant="danger" size="sm" loading={saving === `remove-${member.id}`} onClick={() => setConfirm({ type: 'remove', member })}>Remove</Button>
+                )}
               </div>
-            </div>
-            <div style={{ marginTop: '24px' }}>
-              <button type="submit" className="btn btn-primary" disabled={broadcasting} style={{ width: '100%', justifyContent: 'center' }}>
-                {broadcasting ? 'Sending...' : '📢 Send Broadcast to Members'}
-              </button>
-            </div>
-          </form>
+            );
+          })}
+        </Card>
+      )}
+
+      {activeTab === 'announcements' && (
+        <div className="p7b-list">
+          <Card>
+            <form className="p7b-form-section" onSubmit={postAnnouncement}>
+              <div className="p7b-management-heading"><Megaphone size={20} /><h2>Announcement</h2></div>
+              <FormField label="Title"><Input value={announcement.title} onChange={(event) => setAnnouncement({ ...announcement, title: event.target.value })} /></FormField>
+              <FormField label="Message"><Textarea rows={4} value={announcement.body} onChange={(event) => setAnnouncement({ ...announcement, body: event.target.value })} /></FormField>
+              <Button type="submit" loading={saving === 'announcement'}>Post announcement</Button>
+            </form>
+          </Card>
+          <Card>
+            <form className="p7b-form-section" onSubmit={sendBroadcast}>
+              <div className="p7b-management-heading"><Megaphone size={20} /><h2>Broadcast</h2></div>
+              <Alert title="Member notification">Broadcast uses the existing community broadcast endpoint. It does not create local duplicate notifications.</Alert>
+              <FormField label="Title"><Input value={broadcast.title} onChange={(event) => setBroadcast({ ...broadcast, title: event.target.value })} /></FormField>
+              <FormField label="Message"><Textarea rows={4} value={broadcast.message} onChange={(event) => setBroadcast({ ...broadcast, message: event.target.value })} /></FormField>
+              <FormField label="Urgency"><Select value={broadcast.urgency} onChange={(event) => setBroadcast({ ...broadcast, urgency: event.target.value })}>{['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((item) => <option key={item} value={item}>{readable(item)}</option>)}</Select></FormField>
+              <Button type="submit" loading={saving === 'broadcast'}>Send broadcast</Button>
+            </form>
+          </Card>
+          {announcements.length === 0 ? <EmptyState title="No announcements yet" message="Posted announcements will be shown here." /> : announcements.map((item) => (
+            <Card key={item.id} className="p7b-thread-card">
+              <div className="p7b-thread-top"><h3>{item.title}</h3>{(item.pinned || item.isPinned) && <Badge variant="info">Pinned</Badge>}</div>
+              <p>{item.body || item.message}</p>
+            </Card>
+          ))}
         </div>
       )}
 
-      {activeTab === 'verification' && (
-        <div className="card">
-          <h3 style={{ marginBottom: '20px', fontWeight: 700 }}>Verification Settings</h3>
-
-          <div className="form-group">
-            <label className="form-label">Join Code</label>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <input type="text" className="form-input" value={form.verificationCode}
-                onChange={e => setForm({ ...form, verificationCode: e.target.value.toUpperCase() })}
-                style={{ maxWidth: '200px', fontWeight: 700, letterSpacing: '2px', textAlign: 'center' }} />
-              <button className="btn btn-secondary btn-sm" onClick={() => {
-                const newCode = community.name.replace(/[^A-Z]/gi, '').substring(0, 4).toUpperCase() + Math.floor(1000 + Math.random() * 9000);
-                setForm({ ...form, verificationCode: newCode });
-              }}>
-                🔄 Regenerate
-              </button>
-            </div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '8px' }}>
-              Share this code with members to let them join via the "Join Code" method.
-            </p>
+      {activeTab === 'ownership' && (
+        <Card className="p7b-form-section">
+          <div className="p7b-management-heading"><ShieldCheck size={20} /><h2>Ownership</h2></div>
+          <Alert title="Owner protected">Current owner members are protected from removal and demotion.</Alert>
+          <div className="p7b-review">
+            <div><span>Current role</span><strong>{readable(currentRole || 'Member')}</strong></div>
+            <div><span>Owner actions</span><strong>{owner ? 'Available' : 'Hidden'}</strong></div>
           </div>
-
-          <div className="form-group" style={{ marginTop: '24px' }}>
-            <label className="form-label">Email Domain Verification</label>
-            <input type="text" className="form-input" placeholder="e.g., iitd.ac.in"
-              value={form.emailDomain}
-              onChange={e => setForm({ ...form, emailDomain: e.target.value.toLowerCase() })}
-              style={{ maxWidth: '300px' }} />
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '8px' }}>
-              Members with this email domain can verify via OTP and join automatically. Leave empty to disable.
-            </p>
-          </div>
-
-          <div style={{ marginTop: '16px' }}>
-            <button className="btn btn-primary" disabled={saving} onClick={handleSave}>
-              {saving ? 'Saving...' : '💾 Save Verification Settings'}
-            </button>
-          </div>
-        </div>
+        </Card>
       )}
 
       {activeTab === 'danger' && (
-        <div className="card" style={{ border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.03)' }}>
-          <h3 style={{ marginBottom: '12px', fontWeight: 700, color: '#ef4444' }}>⚠️ Danger Zone</h3>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-            Deleting this community is irreversible. All members will be removed and all associated data will be lost.
-          </p>
-
-          {!showDelete ? (
-            <button className="btn btn-danger" onClick={() => setShowDelete(true)}>
-              🗑️ Delete Community
-            </button>
+        <Card className="p7b-danger-zone">
+          <div className="p7b-management-heading"><Trash2 size={20} /><h2>Danger Zone</h2></div>
+          <p>Use delete only for communities that should no longer be accessible.</p>
+          {owner ? (
+            <Button type="button" variant="danger" onClick={() => setConfirm({ type: 'delete' })}><Trash2 size={16} />Delete community</Button>
           ) : (
-            <div style={{ padding: '16px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-md)' }}>
-              <p style={{ marginBottom: '12px', color: '#ef4444', fontWeight: 600 }}>
-                Type <strong>"{community.name}"</strong> to confirm deletion:
-              </p>
-              <input
-                type="text"
-                className="delete-confirm-input"
-                placeholder={community.name}
-                value={deleteConfirm}
-                onChange={e => setDeleteConfirm(e.target.value)}
-              />
-              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-                <button className="btn btn-secondary" onClick={() => { setShowDelete(false); setDeleteConfirm(''); }}>Cancel</button>
-                <button className="btn btn-danger" onClick={handleDelete} disabled={deleteConfirm !== community.name}>
-                  🗑️ Permanently Delete
-                </button>
-              </div>
-            </div>
+            <Badge variant="warning">Owner action hidden</Badge>
           )}
-        </div>
+        </Card>
       )}
+
+      <ConfirmationDialog
+        open={Boolean(confirm)}
+        title={confirm?.type === 'delete' ? 'Delete community' : 'Remove member'}
+        message={confirm?.type === 'delete'
+          ? `Delete ${community.name}? This action is permanent after it is confirmed.`
+          : `Remove ${confirm?.member?.fullName || 'this member'} from ${community.name}?`}
+        confirmLabel={confirm?.type === 'delete' ? 'Delete community' : 'Remove member'}
+        destructive
+        loading={saving === 'delete' || saving.startsWith('remove-')}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.type === 'delete' ? deleteCommunity() : removeMember(confirm.member)}
+      />
     </div>
   );
 }

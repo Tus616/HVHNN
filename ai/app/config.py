@@ -1,0 +1,23 @@
+import os
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+MODEL_DIR = Path(os.getenv("MODEL_DIR", BASE_DIR / "app" / "models"))
+DATA_DIR = BASE_DIR / "data"
+ML_CATEGORY_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CATEGORY_CONFIDENCE_THRESHOLD", "0.45"))
+ML_URGENCY_CONFIDENCE_THRESHOLD = float(os.getenv("ML_URGENCY_CONFIDENCE_THRESHOLD", "0.45"))
+ML_DUPLICATE_TEXT_THRESHOLD = float(os.getenv("ML_DUPLICATE_TEXT_THRESHOLD", "0.45"))
+ML_DUPLICATE_DISTANCE_KM = float(os.getenv("ML_DUPLICATE_DISTANCE_KM", "5.0"))
+ML_DUPLICATE_OVERALL_THRESHOLD = float(os.getenv("ML_DUPLICATE_OVERALL_THRESHOLD", "0.60"))
+ML_MAX_CANDIDATES = int(os.getenv("ML_MAX_CANDIDATES", "100"))
+ML_RANKER_MIN_TRAINING_ROWS = int(os.getenv("ML_RANKER_MIN_TRAINING_ROWS", "100"))
+MIN_VOLUNTEER_LABELS = ML_RANKER_MIN_TRAINING_ROWS
+MODEL_VERSION = "phase9-request-intelligence-v1"
+VOLUNTEER_RANKER_VERSION = "phase10-volunteer-ranker-v1"
+
+CATEGORIES = ["BLOOD_DONATION", "MEDICAL", "FOOD", "TRANSPORT", "EMERGENCY", "GENERAL"]
+URGENCIES = ["LOW", "MEDIUM", "HIGH"]
+
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)

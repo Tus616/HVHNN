@@ -1,0 +1,127 @@
+{
+  "modelName": "TF-IDF + LogisticRegression request intelligence",
+  "modelVersion": "phase9-request-intelligence-v1",
+  "trainedAt": "2026-08-11T15:47:36.558028+00:00",
+  "realTrainingRows": 0,
+  "bootstrapRows": 54,
+  "metrics": {
+    "category": {
+      "accuracy": 0.6667,
+      "macroF1": 0.6669,
+      "perClassF1": {
+        "BLOOD_DONATION": 1.0,
+        "MEDICAL": 0.8571,
+        "FOOD": 0.4,
+        "TRANSPORT": 0.5,
+        "EMERGENCY": 0.8,
+        "GENERAL": 0.4444
+      },
+      "confusionMatrixLabels": [
+        "BLOOD_DONATION",
+        "MEDICAL",
+        "FOOD",
+        "TRANSPORT",
+        "EMERGENCY",
+        "GENERAL"
+      ],
+      "confusionMatrix": [
+        [
+          3,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          3,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          1,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          1,
+          0,
+          2
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          2,
+          1
+        ],
+        [
+          0,
+          0,
+          1,
+          0,
+          0,
+          2
+        ]
+      ]
+    },
+    "urgency": {
+      "accuracy": 0.5,
+      "macroF1": 0.4925,
+      "perClassF1": {
+        "LOW": 0.4444,
+        "MEDIUM": 0.4615,
+        "HIGH": 0.5714
+      },
+      "confusionMatrixLabels": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ],
+      "confusionMatrix": [
+        [
+          2,
+          3,
+          0
+        ],
+        [
+          0,
+          3,
+          3
+        ],
+        [
+          2,
+          1,
+          4
+        ]
+      ]
+    }
+  },
+  "featureConfig": {
+    "textFields": [
+      "title",
+      "description"
+    ],
+    "wordNgrams": [
+      1,
+      3
+    ],
+    "charNgrams": [
+      3,
+      5
+    ],
+    "classWeight": "balanced",
+    "randomState": 42
+  },
+  "bootstrapDataUsed": true
+}

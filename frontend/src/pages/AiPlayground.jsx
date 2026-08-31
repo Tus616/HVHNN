@@ -145,7 +145,7 @@ export default function AiPlayground() {
             <Brain size={28} />
           </div>
           <div>
-            <h1 className="ai-pg-title">HVHN-AI Engine</h1>
+            <h1 className="ai-pg-title">Sahay AI Engine</h1>
             <p className="ai-pg-subtitle">Unified JSON processing engine — 6 intelligent modes</p>
           </div>
         </div>
@@ -230,7 +230,7 @@ export default function AiPlayground() {
           {loading && (
             <div className="ai-pg-empty">
               <div className="spinner" style={{ width: 32, height: 32 }} />
-              <p>HVHN-AI is processing...</p>
+              <p>Sahay AI is processing...</p>
             </div>
           )}
 

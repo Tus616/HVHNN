@@ -3,6 +3,7 @@ package com.hvhn.backend.model.enums;
 import com.fasterxml.jackson.annotation.JsonCreator;
 
 public enum MemberRole {
+    OWNER,
     ADMIN,
     MODERATOR,
     MEMBER;

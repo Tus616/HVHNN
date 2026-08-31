@@ -8,12 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.stereotype.Service;
-
-import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -29,18 +23,15 @@ public class SmartSearchService {
     private final GeminiService geminiService;
     private final HelpRequestRepository helpRequestRepository;
     private final RequestViewMapper requestViewMapper;
-    private final MongoTemplate mongoTemplate;
     private final EmbeddingService embeddingService;
 
     public SmartSearchService(GeminiService geminiService,
                                HelpRequestRepository helpRequestRepository,
                                RequestViewMapper requestViewMapper,
-                               MongoTemplate mongoTemplate,
                                EmbeddingService embeddingService) {
         this.geminiService = geminiService;
         this.helpRequestRepository = helpRequestRepository;
         this.requestViewMapper = requestViewMapper;
-        this.mongoTemplate = mongoTemplate;
         this.embeddingService = embeddingService;
     }
 
@@ -57,25 +48,10 @@ public class SmartSearchService {
         result.put("detectedUrgency", intent.urgency);
         result.put("interpretation", intent.interpretation);
 
-        // Step 2: Query only the relevant category from the database
-        // Step 2: Query only the relevant category from the specific category-based databases/tables
-        List<HelpRequest> candidates = null;
+        // Step 2: Query the unified help_requests collection.
+        List<HelpRequest> candidates;
         if (intent.category != null && !intent.category.equals("ALL")) {
-            String targetCollection = "help_requests_" + intent.category.toLowerCase();
-            try {
-                // Queries directly hit the correct table, improving speed and reducing noise
-                if (mongoTemplate.collectionExists(targetCollection)) {
-                    Query dbQuery = new Query(Criteria.where("status").is("OPEN"));
-                    candidates = mongoTemplate.find(dbQuery, HelpRequest.class, targetCollection);
-                }
-            } catch (Exception e) {
-                logger.warn("Dynamic collection querying failed", e);
-            }
-            
-            // Fallback to indexed search in unified collection if dynamic collection is empty/missing
-            if (candidates == null || candidates.isEmpty()) {
-                candidates = helpRequestRepository.findByCategoryAndStatus(intent.category, "OPEN");
-            }
+            candidates = helpRequestRepository.findByCategoryAndStatus(intent.category, "OPEN");
             if (candidates.isEmpty()) {
                 // Broaden search to all open requests as fallback
                 candidates = helpRequestRepository.findByStatus("OPEN");

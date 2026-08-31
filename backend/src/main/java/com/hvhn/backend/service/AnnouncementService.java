@@ -7,7 +7,6 @@ import com.hvhn.backend.model.User;
 import com.hvhn.backend.repository.AnnouncementRepository;
 import com.hvhn.backend.repository.CommunityRepository;
 import com.hvhn.backend.repository.MemberRepository;
-import com.hvhn.backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -22,23 +21,23 @@ public class AnnouncementService {
     private final AnnouncementRepository announcementRepository;
     private final CommunityRepository communityRepository;
     private final MemberRepository memberRepository;
-    private final UserRepository userRepository;
-    private final FirebaseService firebaseService;
+    private final NotificationService notificationService;
 
     public AnnouncementService(AnnouncementRepository announcementRepository,
                                CommunityRepository communityRepository,
                                MemberRepository memberRepository,
-                               UserRepository userRepository,
-                               FirebaseService firebaseService) {
+                               NotificationService notificationService) {
         this.announcementRepository = announcementRepository;
         this.communityRepository = communityRepository;
         this.memberRepository = memberRepository;
-        this.userRepository = userRepository;
-        this.firebaseService = firebaseService;
+        this.notificationService = notificationService;
     }
 
     public List<Announcement> getAnnouncements(String communityId) {
-        return announcementRepository.findByCommunityIdOrderByIsPinnedDescCreatedAtDesc(communityId);
+        return announcementRepository.findByCommunityIdOrderByIsPinnedDescCreatedAtDesc(communityId)
+                .stream()
+                .filter(a -> "ACTIVE".equals(a.getStatus()))
+                .toList();
     }
 
     public List<Announcement> getAllPinnedAnnouncements(List<String> communityIds) {
@@ -52,47 +51,38 @@ public class AnnouncementService {
         announcement.setAuthorId(author.getId());
         announcement.setAuthorName(author.getFullName());
         Announcement saved = announcementRepository.save(announcement);
-
-        // Background notification broadcast
-        new Thread(() -> broadcastNotification(saved)).start();
-
+        broadcastNotification(saved);
         return saved;
     }
 
-    public void deleteAnnouncement(String id) {
-        announcementRepository.deleteById(id);
+    public void deleteAnnouncement(String communityId, String id) {
+        Announcement announcement = announcementRepository.findById(id)
+                .filter(entry -> communityId.equals(entry.getCommunityId()))
+                .orElseThrow(() -> new RuntimeException("Announcement not found"));
+        announcement.setStatus("DELETED");
+        announcementRepository.save(announcement);
     }
 
-    public Announcement togglePin(String id) {
-        Announcement a = announcementRepository.findById(id)
+    public Announcement togglePin(String communityId, String id) {
+        Announcement announcement = announcementRepository.findById(id)
+                .filter(entry -> communityId.equals(entry.getCommunityId()))
                 .orElseThrow(() -> new RuntimeException("Announcement not found"));
-        a.setPinned(!a.isPinned());
-        return announcementRepository.save(a);
+        announcement.setPinned(!announcement.isPinned());
+        return announcementRepository.save(announcement);
     }
 
     private void broadcastNotification(Announcement announcement) {
         try {
             Community community = communityRepository.findById(announcement.getCommunityId()).orElse(null);
             if (community == null) return;
-
-            List<Member> members = memberRepository.findByCommunityIdOrderByJoinedAtAsc(announcement.getCommunityId());
-            List<String> userIds = members.stream().map(Member::getUserId).collect(Collectors.toList());
-
-            List<User> users = userRepository.findAllById(userIds);
-            String title = "📢 " + community.getName() + ": New Announcement";
-            String body = announcement.getTitle();
-
-            for (User user : users) {
-                if (user.getNotificationToken() != null && !user.getNotificationToken().isBlank()) {
-                    try {
-                        firebaseService.sendNotification(user.getNotificationToken(), title, body);
-                    } catch (Exception e) {
-                        logger.warn("Failed to send notification to user {}: {}", user.getId(), e.getMessage());
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Error broadcasting community notification", e);
+            List<String> userIds = memberRepository.findByCommunityIdOrderByJoinedAtAsc(announcement.getCommunityId())
+                    .stream()
+                    .map(Member::getUserId)
+                    .filter(userId -> !userId.equals(announcement.getAuthorId()))
+                    .toList();
+            notificationService.notifyCommunityAnnouncement(announcement, community, userIds);
+        } catch (RuntimeException exception) {
+            logger.warn("Community notification broadcast failed for announcementId={}: {}", announcement.getId(), exception.getMessage());
         }
     }
 }

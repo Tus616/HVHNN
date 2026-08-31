@@ -40,7 +40,8 @@ export default function CommunitySidebar({ community, members, requests, isJoine
     }
   };
 
-  const activeReqs = requests.filter(r => r.status === 'OPEN' || r.status === 'ACCEPTED').length;
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const activeReqs = reqArr.filter(r => r.status === 'OPEN' || r.status === 'ACCEPTED').length;
 
   return (
     <aside className="community-sidebar card">
@@ -56,7 +57,7 @@ export default function CommunitySidebar({ community, members, requests, isJoine
 
       <div className="sidebar-stats" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '24px' }}>
         <div className="sidebar-stat" style={{ background: 'var(--surface)' }}>
-          <div className="sidebar-stat-value">{members.length}</div>
+          <div className="sidebar-stat-value">{Array.isArray(members) ? members.length : 0}</div>
           <div className="sidebar-stat-label">Members</div>
         </div>
         <div className="sidebar-stat" style={{ background: 'var(--surface)' }}>
@@ -97,7 +98,7 @@ export default function CommunitySidebar({ community, members, requests, isJoine
       {/* Mini Recent Activity */}
       <div style={{ paddingTop: '16px', borderTop: '1px solid var(--border)', marginTop: '24px' }}>
         <div className="community-section-eyebrow">Recent Requests</div>
-        {requests.slice(0, 3).map(r => (
+        {reqArr.slice(0, 3).map(r => (
           <div key={r.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(0,0,0,0.05)', fontSize: '0.85rem' }}>
             <strong style={{ display: 'block', color: 'var(--text-primary)' }}>{r.title}</strong>
             <span style={{ color: 'var(--text-secondary)' }}>Status: {r.status}</span>

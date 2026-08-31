@@ -6,7 +6,9 @@ import { AuthProvider } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { AccessibilityProvider } from './context/AccessibilityContext';
+import 'leaflet/dist/leaflet.css';
 import './index.css';
+import './phase7.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

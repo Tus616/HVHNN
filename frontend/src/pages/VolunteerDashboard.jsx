@@ -73,7 +73,8 @@ export default function VolunteerDashboard() {
   }
 
   async function acceptRequest(requestId) {
-    const reqToAccept = dashboard.incoming.find(r => r.id === requestId);
+    const incoming = Array.isArray(dashboard.incoming) ? dashboard.incoming : [];
+    const reqToAccept = incoming.find(r => r.id === requestId);
     setActionKey(`accept-${requestId}`);
     try {
       await apiService.acceptVolunteerRequest(requestId, user);
@@ -157,7 +158,8 @@ export default function VolunteerDashboard() {
     const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
     const currentDay = days[now.getDay()];
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const enabledSlots = user.availabilitySchedule.filter(e => e.enabled);
+    const schedule = Array.isArray(user?.availabilitySchedule) ? user.availabilitySchedule : [];
+    const enabledSlots = schedule.filter(e => e.enabled);
     if (!enabledSlots.length) return null;
     const todayWindow = enabledSlots.find(e => e.day === currentDay && e.startTime > currentTime);
     if (todayWindow) return `Today at ${todayWindow.startTime}`;

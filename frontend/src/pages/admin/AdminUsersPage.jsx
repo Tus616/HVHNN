@@ -5,6 +5,9 @@ import AdminLoadingState from '../../components/admin/AdminLoadingState';
 import AdminPagination from '../../components/admin/AdminPagination';
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import { adminApi } from '../../services/adminApi';
+import { ConfirmationDialog, DropdownMenu, ErrorState } from '../../components/ui';
+import { formatDateShort } from '../../utils/displayFormat';
+import { normalizeApiError } from '../../utils/errors';
 
 const DEFAULT_FILTERS = {
   role: '',
@@ -18,6 +21,8 @@ export default function AdminUsersPage() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [userPage, setUserPage] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -26,12 +31,13 @@ export default function AdminUsersPage() {
       setLoading(true);
 
       try {
+        setError('');
         const response = await adminApi.getUsers(filters, user);
         if (!active) return;
         setUserPage(response.data);
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin users.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -58,7 +64,7 @@ export default function AdminUsersPage() {
         await adminApi.verifyUser(row.id);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id ? { ...entry, verified: true, status: entry.blocked ? 'BLOCKED' : 'VERIFIED' } : entry
           )),
         }));
@@ -69,7 +75,7 @@ export default function AdminUsersPage() {
         await adminApi.toggleBlockUser(row.id, row.blocked);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id
               ? { ...entry, blocked: !entry.blocked, status: !entry.blocked ? 'BLOCKED' : entry.verified ? 'VERIFIED' : 'UNVERIFIED' }
               : entry
@@ -86,20 +92,25 @@ export default function AdminUsersPage() {
         await adminApi.assignVolunteerBadge(row.id);
         setUserPage((current) => ({
           ...current,
-          items: current.items.map((entry) => (
+          items: (Array.isArray(current?.items) ? current.items : []).map((entry) => (
             entry.id === row.id ? { ...entry, role: 'VOLUNTEER', badge: 'Volunteer' } : entry
           )),
         }));
         showToast({ type: 'success', title: 'Volunteer badge assigned', message: `${row.fullName} now has volunteer access.` });
       }
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Action failed', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Action failed', message: normalizeApiError(error, 'Please try again.').message });
+    } finally {
+      setConfirmation(null);
     }
   }
 
   if (loading && !userPage) {
     return <AdminLoadingState label="Loading user management..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
   }
 
   const rows = userPage?.items || [];
@@ -169,32 +180,13 @@ export default function AdminUsersPage() {
                       <td><AdminStatusBadge value={member.role} /></td>
                       <td>{member.community}</td>
                       <td><AdminStatusBadge value={member.status} /></td>
-                      <td>{new Date(member.joinedDate).toLocaleDateString()}</td>
+                      <td>{formatDateShort(member.joinedDate)}</td>
                       <td>
-                        <div className="admin-row-actions">
-                          <button
-                            type="button"
-                            className="admin-btn admin-btn-success"
-                            onClick={() => handleUserAction('verify', member)}
-                            disabled={member.verified}
-                          >
-                            Verify
-                          </button>
-                          <button
-                            type="button"
-                            className={`admin-btn ${member.blocked ? 'admin-btn-success' : 'admin-btn-danger'}`}
-                            onClick={() => handleUserAction('block', member)}
-                          >
-                            {member.blocked ? 'Unblock' : 'Block'}
-                          </button>
-                          <button
-                            type="button"
-                            className="admin-btn admin-btn-secondary"
-                            onClick={() => handleUserAction('badge', member)}
-                          >
-                            Assign Badge
-                          </button>
-                        </div>
+                        <DropdownMenu label="Actions">
+                          <button type="button" disabled={member.verified} onClick={() => handleUserAction('verify', member)}>Verify</button>
+                          <button type="button" onClick={() => setConfirmation({ action: 'block', row: member })}>{member.blocked ? 'Unblock' : 'Block'}</button>
+                          <button type="button" onClick={() => handleUserAction('badge', member)}>Assign volunteer badge</button>
+                        </DropdownMenu>
                       </td>
                     </tr>
                   ))}
@@ -210,6 +202,15 @@ export default function AdminUsersPage() {
           </>
         )}
       </section>
+      <ConfirmationDialog
+        open={Boolean(confirmation)}
+        title={confirmation?.row?.blocked ? 'Unblock user?' : 'Block user?'}
+        message={`${confirmation?.row?.fullName || 'This user'} will be ${confirmation?.row?.blocked ? 'restored' : 'blocked'} in the admin scope.`}
+        confirmLabel={confirmation?.row?.blocked ? 'Unblock' : 'Block'}
+        destructive={!confirmation?.row?.blocked}
+        onClose={() => setConfirmation(null)}
+        onConfirm={() => handleUserAction(confirmation.action, confirmation.row)}
+      />
     </div>
   );
 }

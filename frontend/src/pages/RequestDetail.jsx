@@ -1,625 +1,488 @@
-// FEATURE: Request Detail + Comments + Status Tracking + Rating + Bookmark + Share
-import { useState, useEffect, useCallback, Fragment } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { AlertTriangle, CheckCircle2, Clock, HeartHandshake, MapPin, MessageSquare, Navigation, RotateCcw, ShieldCheck, Trash2, UserRound, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import apiService from '../services/api';
-import useBookmarks from '../hooks/useBookmarks';
-import ShareDropdown from '../components/ShareDropdown';
+import { normalizeApiError } from '../utils/errors';
 import { timeAgo } from '../utils/timeUtils';
-import VolunteerNavigationMap from '../components/volunteer/VolunteerNavigationMap';
+import { Alert, Avatar, Badge, Button, Card, ConfirmationDialog, EmptyState, ErrorState, FormField, Skeleton, StatusBadge, Textarea, UrgencyBadge, UserSummary } from '../components/ui';
 
-const URGENCY_CLASS = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low' };
-const STATUS_CLASS = { OPEN: 'badge-status-open', ACCEPTED: 'badge-status-accepted', ACTIVE: 'badge-status-accepted', COMPLETED: 'badge-status-completed', CANCELLED: 'badge-status-cancelled' };
-const CATEGORY_ICONS = { BLOOD_DONATION: '🩸', MEDICAL: '🏥', FOOD: '🍲', TRANSPORT: '🚗', EMERGENCY: '🚨', GENERAL: '📋' };
-
-const STATUS_STEPS = [
-  { key: 'ASSIGNED', label: 'Assigned', icon: '✓' },
-  { key: 'ON_THE_WAY', label: 'On the Way', icon: '🚗' },
-  { key: 'REACHED', label: 'Reached', icon: '📍' },
-  { key: 'COMPLETED', label: 'Completed', icon: '✅' },
-];
-
-const EVENT_META = {
-  REQUEST_RAISED: { icon: '🚀', label: 'Request Raised', color: 'gray' },
-  VOLUNTEER_NOTIFIED: { icon: '🔔', label: 'Volunteers Notified', color: 'gray' },
-  VOLUNTEER_ACCEPTED: { icon: '🤝', label: 'Volunteer Accepted', color: 'green' },
-  ON_THE_WAY: { icon: '🚗', label: 'On the Way', color: 'green' },
-  REACHED: { icon: '📍', label: 'Reached Location', color: 'green' },
-  COMPLETED: { icon: '✅', label: 'Request Completed', color: 'green' },
-  EXPIRED: { icon: '⏲️', label: 'Request Expired', color: 'red' },
-  CANCELLED: { icon: '❌', label: 'Request Cancelled', color: 'red' },
+const EVENT_LABELS = {
+  REQUEST_RAISED: ['Request created', 'The requester shared the help request.'],
+  VOLUNTEER_ACCEPTED: ['Volunteer accepted', 'A verified volunteer accepted the request.'],
+  REQUEST_ACCEPTED: ['Volunteer accepted', 'A verified volunteer accepted the request.'],
+  ON_THE_WAY: ['On the way', 'The volunteer is travelling to the location.'],
+  VOLUNTEER_ON_THE_WAY: ['On the way', 'The volunteer is travelling to the location.'],
+  REACHED: ['Reached', 'The volunteer reached the location.'],
+  VOLUNTEER_REACHED: ['Reached', 'The volunteer reached the location.'],
+  HELPING: ['Help started', 'The volunteer started helping.'],
+  HELP_STARTED: ['Help started', 'The volunteer started helping.'],
+  COMPLETION_REQUESTED: ['Completion requested', 'The volunteer asked the requester to verify completion.'],
+  PENDING_COMPLETION: ['Completion requested', 'The volunteer asked the requester to verify completion.'],
+  COMPLETION_REJECTED: ['Completion rejected', 'The requester asked for more help.'],
+  COMPLETION_VERIFIED: ['Completion verified', 'The requester confirmed help was completed.'],
+  REQUEST_COMPLETED: ['Request completed', 'This request has been completed.'],
+  COMPLETED: ['Request completed', 'This request has been completed.'],
+  REQUEST_CANCELLED: ['Request cancelled', 'The requester cancelled this request.'],
+  CANCELLED: ['Request cancelled', 'The requester cancelled this request.'],
+  VOLUNTEER_WITHDREW: ['Volunteer withdrew', 'The volunteer withdrew from this request.'],
 };
+
+function normalizeStatus(request) {
+  const status = String(request?.status || 'OPEN').toUpperCase();
+  if (status === 'ACTIVE' || status === 'ACCEPTED') return 'ASSIGNED';
+  if (status === 'PENDING_COMPLETION') return 'COMPLETION_REQUESTED';
+  return status;
+}
+
+function safeLocation(request) {
+  return [request?.address || request?.location, request?.city, request?.district, request?.state].filter(Boolean).join(', ') || 'Location details unavailable';
+}
+
+function actorName(entry) {
+  return entry.actorName || entry.actor?.fullName || entry.userName || 'Sahay';
+}
+
+function commentAuthorName(comment) {
+  return comment.authorName || comment.author?.fullName || comment.author || 'Member';
+}
+
+function Timeline({ request }) {
+  const events = Array.isArray(request.timeline) ? request.timeline : [];
+  const fallback = [{
+    event: 'REQUEST_RAISED',
+    actorName: request.requester?.fullName || 'Requester',
+    timestamp: request.createdAtEpochMs || request.createdAt,
+  }];
+  const entries = events.length > 0 ? events : fallback;
+  return (
+    <Card className="p7-detail-card">
+      <div className="p7-section-heading">
+        <h2>Timeline</h2>
+        <p>Readable request progress without internal enum noise.</p>
+      </div>
+      <div className="p7-timeline">
+        {entries.map((entry, index) => {
+          const [label, description] = EVENT_LABELS[entry.event] || [String(entry.event || 'Update').replace(/_/g, ' '), entry.description || 'Request activity updated.'];
+          return (
+            <div className="p7-timeline-item" key={`${entry.event}-${entry.timestamp}-${index}`}>
+              <span className="p7-timeline-dot"><CheckCircle2 size={16} /></span>
+              <div>
+                <strong>{label}</strong>
+                <p>{entry.description || description}</p>
+                <small>{actorName(entry)} · {entry.timestamp ? timeAgo(entry.timestamp) : 'Time unavailable'}</small>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function Comments({ comments, value, onChange, onSubmit, submitting, user, onDeleteComment, deletingComment }) {
+  const currentUserId = user?.userId || user?.id;
+  const canDeleteComment = (comment) => {
+    const authorId = comment.authorId || comment.userId || comment.author?.id;
+    return user?.role === 'ADMIN' || String(authorId || '') === String(currentUserId || '');
+  };
+
+  return (
+    <Card className="p7-detail-card">
+      <div className="p7-section-heading">
+        <h2>Comments</h2>
+        <p>Use comments for clarifying safe, practical details.</p>
+      </div>
+      {comments.length === 0 ? (
+        <EmptyState title="No comments yet" message="Ask a useful question or share how you can help." />
+      ) : (
+        <div className="p7-comments-list">
+          {comments.map((comment) => (
+            <article key={comment.id || `${comment.createdAt}-${comment.text}`} className="p7-comment">
+              <Avatar name={commentAuthorName(comment)} src={comment.authorProfileImage || comment.avatarUrl || comment.author?.avatarUrl || comment.author?.profileImage} />
+              <div>
+                <div className="p7-comment__header">
+                  <span><strong>{commentAuthorName(comment)}</strong><small>{timeAgo(comment.time || comment.createdAt)}</small></span>
+                  {comment.id && canDeleteComment(comment) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      loading={deletingComment === comment.id}
+                      onClick={() => onDeleteComment(comment)}
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </div>
+                <p>{comment.text || comment.body}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <form className="p7-comment-form" onSubmit={onSubmit}>
+        <FormField label="Add a comment" hint={`${value.length}/500 characters`}>
+          <Textarea rows={3} maxLength={500} value={value} onChange={(event) => onChange(event.target.value)} />
+        </FormField>
+        <Button type="submit" loading={submitting} disabled={!value.trim() || value.length > 500}><MessageSquare size={16} /> Post Comment</Button>
+      </form>
+    </Card>
+  );
+}
 
 export default function RequestDetail() {
   const { id } = useParams();
   const { user } = useAuth();
-  const { notifyRequestAccepted, notifyRequestCompleted, notifyPoints } = useNotifications();
+  const { notifyRequestAccepted, notifyRequestCompleted, notifyPoints, showToast } = useNotifications();
   const navigate = useNavigate();
   const [request, setRequest] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const { isBookmarked, toggleBookmark } = useBookmarks();
-  const [toast, setToast] = useState(null);
-  const [activeMapRequest, setActiveMapRequest] = useState(null);
-
-  // Comments
   const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState('');
-
-  // Rating
-  const [showRating, setShowRating] = useState(false);
-  const [ratingLoading, setRatingLoading] = useState(false);
-  
-  // AI Suggestions
-  const [aiSuggestion, setAiSuggestion] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
-
-  useEffect(() => { loadRequest(); }, [id]);
+  const [commentText, setCommentText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [commenting, setCommenting] = useState(false);
+  const [error, setError] = useState(null);
+  const [actionLoading, setActionLoading] = useState('');
+  const [deletingComment, setDeletingComment] = useState('');
+  const [confirmAction, setConfirmAction] = useState(null);
 
   const loadRequest = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const res = await apiService.getRequestById(id);
-      setRequest(res.data);
-
-      // Check if rating pending
-      if (res.data.requesterRatingPending && !res.data.requesterRated && res.data.requester?.id === user?.userId) {
-        setShowRating(true);
-      }
-
-      // Load mock comments
-      setComments(getMockComments(id));
+      const response = await apiService.getRequestById(id);
+      const nextRequest = response.data || null;
+      setRequest(nextRequest);
+      const commentsResponse = await apiService.getRequestComments(id);
+      setComments((commentsResponse.data || []).map((comment) => ({
+        ...comment,
+        author: commentAuthorName(comment),
+        authorId: comment.authorId || comment.userId || comment.author?.id,
+        time: comment.createdAt || comment.time,
+      })));
     } catch (err) {
-      console.error(err);
-      showToast(err.message || 'Failed to load request', 'error');
+      setError(normalizeApiError(err, 'Could not load this request.'));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (request && user?.isVolunteer && request.status === 'OPEN' && !isRequester) {
-      loadAiSuggestion();
-    }
-  }, [request?.id, user?.userId]);
+    loadRequest();
+  }, [id]);
 
-  const loadAiSuggestion = async () => {
-    setAiLoading(true);
+  const status = normalizeStatus(request);
+  const requesterId = request?.requester?.id || request?.requesterId || request?.userId;
+  const volunteerId = request?.volunteer?.id || request?.volunteerId;
+  const currentUserId = user?.userId || user?.id;
+  const isRequester = String(requesterId) === String(currentUserId);
+  const isVolunteer = String(volunteerId) === String(currentUserId);
+  const isPendingCompletion = status === 'COMPLETION_REQUESTED';
+  const activeVolunteerState = ['ASSIGNED', 'IN_PROGRESS'].includes(status);
+
+  const primaryAction = useMemo(() => {
+    if (!request) return null;
+    if (status === 'OPEN' && !isRequester && user?.isVolunteer && request.canAccept !== false) {
+      return { key: 'accept', label: 'Accept Request', icon: HeartHandshake, kind: 'primary', run: () => apiService.acceptRequest(id, user) };
+    }
+    if (activeVolunteerState && isVolunteer) {
+      const progress = String(request.volunteerProgressStatus || '').toUpperCase();
+      if (!progress || progress === 'ASSIGNED') return { key: 'ON_THE_WAY', label: 'Mark On the Way', icon: Navigation, kind: 'primary', run: () => apiService.updateVolunteerRequestStatus(id, 'ON_THE_WAY', user) };
+      if (progress === 'ON_THE_WAY') return { key: 'REACHED', label: 'Mark Reached', icon: MapPin, kind: 'primary', run: () => apiService.updateVolunteerRequestStatus(id, 'REACHED', user) };
+      if (progress === 'REACHED') return { key: 'HELPING', label: 'Start Helping', icon: ShieldCheck, kind: 'primary', run: () => apiService.updateVolunteerRequestStatus(id, 'HELPING', user) };
+      return { key: 'completion', label: 'Request Completion', icon: CheckCircle2, kind: 'primary', run: () => apiService.requestCompletion(id, user) };
+    }
+    if (isPendingCompletion && isRequester) {
+      return { key: 'verify', label: 'Confirm Completion', icon: CheckCircle2, kind: 'primary', run: () => apiService.verifyRequestCompletion(id, user) };
+    }
+    return null;
+  }, [activeVolunteerState, id, isPendingCompletion, isRequester, isVolunteer, request, status, user]);
+
+  const runAction = async (action) => {
+    if (!action || actionLoading) return;
+    setActionLoading(action.key);
     try {
-      const res = await apiService.ai.getResponseSuggestion(request, user);
-      setAiSuggestion(res.data);
+      await action.run();
+      if (action.key === 'accept') {
+        notifyRequestAccepted?.(request, user?.fullName);
+        notifyPoints?.(10, 'accepting a help request');
+      }
+      if (action.key === 'verify') {
+        notifyRequestCompleted?.(request);
+        notifyPoints?.(50, 'verified completion');
+      }
+      if (action.key === 'delete') {
+        showToast({ type: 'success', title: 'Request deleted', message: 'The request was permanently deleted.' });
+        navigate('/my-requests', { replace: true });
+        return;
+      }
+      showToast({ type: 'success', title: 'Request updated', message: 'Latest request status loaded.' });
+      await loadRequest();
     } catch (err) {
-      console.warn('AI suggestion failed:', err);
+      const normalized = normalizeApiError(err, 'Could not update this request.');
+      showToast({ type: 'error', title: 'Action failed', message: normalized.message });
     } finally {
-      setAiLoading(false);
+      setActionLoading('');
     }
   };
 
-  const useAiSuggestion = () => {
-    if (aiSuggestion) {
-      setNewComment(aiSuggestion.volunteer_message);
-      showToast('AI suggestion copied to comment box!');
+  const requestConfirmation = (action, message) => {
+    setConfirmAction({
+      ...action,
+      message,
+    });
+  };
+
+  const addComment = async (event) => {
+    event.preventDefault();
+    if (!commentText.trim()) return;
+    setCommenting(true);
+    try {
+      const response = await apiService.addRequestComment(id, commentText.trim());
+      const comment = response.data || {};
+      setComments((current) => [...current, {
+        ...comment,
+        text: comment.text || commentText.trim(),
+        author: comment.authorName || comment.author || user?.fullName || 'You',
+        authorProfileImage: comment.authorProfileImage || comment.avatarUrl || user?.profileImage || user?.avatarUrl,
+        avatarUrl: comment.avatarUrl || comment.authorProfileImage || user?.avatarUrl || user?.profileImage,
+        time: comment.createdAt || new Date().toISOString(),
+      }]);
+      setCommentText('');
+    } catch (err) {
+      const normalized = normalizeApiError(err, 'Could not post this comment.');
+      showToast({ type: 'error', title: 'Comment failed', message: normalized.message });
+    } finally {
+      setCommenting(false);
     }
   };
 
-  const showToast = useCallback((msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
-  }, []);
+  const deleteComment = async (comment) => {
+    setDeletingComment(comment.id);
+    try {
+      await apiService.deleteRequestComment(id, comment.id);
+      setComments((current) => current.filter((entry) => entry.id !== comment.id));
+      showToast({ type: 'success', title: 'Comment deleted', message: 'The comment was removed from this request.' });
+    } catch (err) {
+      const normalized = normalizeApiError(err, 'Could not delete this comment.');
+      showToast({ type: 'error', title: 'Delete failed', message: normalized.message });
+    } finally {
+      setDeletingComment('');
+    }
+  };
 
-  // Mock comments
-  function getMockComments(reqId) {
-    const stored = sessionStorage.getItem(`comments_${reqId}`);
-    if (stored) return JSON.parse(stored);
-    const defaults = [
-      { id: 1, text: 'I can help with this! Contact me.', author: 'Sneha Gupta', time: new Date(Date.now() - 3600000).toISOString() },
-      { id: 2, text: 'Is the situation still ongoing? I am nearby.', author: 'Vikram Singh', time: new Date(Date.now() - 1800000).toISOString() },
-    ];
-    return defaults;
+  if (loading) {
+    return <div className="p7-detail"><Skeleton lines={8} /><Skeleton lines={6} /></div>;
   }
 
-  function saveComments(reqId, list) {
-    sessionStorage.setItem(`comments_${reqId}`, JSON.stringify(list));
+  if (error) {
+    return <ErrorState title="Request unavailable" message={error.message} onRetry={loadRequest} />;
   }
 
-  const handleAddComment = (e) => {
-    e.preventDefault();
-    if (!newComment.trim()) return;
-    const comment = {
-      id: Date.now(),
-      text: newComment.trim(),
-      author: user?.fullName || 'You',
-      time: new Date().toISOString(),
-    };
-    const updated = [...comments, comment];
-    setComments(updated);
-    saveComments(id, updated);
-    setNewComment('');
-    showToast('Comment posted!');
-  };
+  if (!request) {
+    return <EmptyState title="Request not found" message="This request may have been deleted or you may not have access." actionLabel="Back to Feed" actionTo="/feed" />;
+  }
 
-  const handleAccept = async () => {
-    if (!user?.isVolunteer) {
-      showToast('Enable volunteer mode to accept this request.', 'error');
-      navigate('/volunteer/settings');
-      return;
-    }
-    try {
-      await apiService.acceptRequest(id, user);
-      showToast('Request accepted! Thank you for volunteering! 🎉');
-      notifyRequestAccepted(request, user.fullName);
-      notifyPoints(10, 'accepting a help request');
-      setActiveMapRequest(request);
-      loadRequest();
-    } catch (err) {
-      showToast(err.message || 'Failed to accept', 'error');
-    }
-  };
-
-  const handleComplete = async () => {
-    try {
-      await apiService.completeRequest(id);
-      showToast('Request marked as completed! +50 points earned! 🏆');
-      notifyRequestCompleted(request);
-      notifyPoints(50, 'completing a help request');
-      loadRequest();
-    } catch (err) {
-      showToast(err.message || 'Failed to complete', 'error');
-    }
-  };
-
-  const handleCancel = async () => {
-    try {
-      await apiService.cancelRequest(id);
-      showToast('Request cancelled.');
-      loadRequest();
-    } catch (err) {
-      showToast(err.message || 'Failed to cancel', 'error');
-    }
-  };
-
-  const handleSubmitRating = async () => {
-    if (rating === 0) { showToast('Please select a rating', 'error'); return; }
-    setRatingLoading(true);
-    try {
-      await apiService.rateVolunteer({
-        requestId: request.id,
-        volunteerId: request.volunteer?.id,
-        rating,
-        feedback: ratingFeedback,
-      }, user?.userId);
-      showToast('Rating submitted! Thank you! ⭐');
-      setShowRating(false);
-      loadRequest();
-    } catch (err) {
-      showToast(err.message || 'Failed to submit rating', 'error');
-    } finally {
-      setRatingLoading(false);
-    }
-  };
-
-  if (loading) return <div className="loading"><div className="spinner" /></div>;
-  if (!request) return <div className="empty-state"><h3>Request not found</h3></div>;
-
-  const isRequester = String(request.requester?.id) === String(user?.userId);
-  const isVolunteer = String(request.volunteer?.id) === String(user?.userId);
-  const displayStatus = request.status === 'ACCEPTED' ? 'ACTIVE' : request.status;
-  const currentProgress = request.volunteerProgressStatus || (request.status === 'ACTIVE' ? 'ASSIGNED' : null);
+  const ActionIcon = primaryAction?.icon;
 
   return (
-    <div className="animate-in">
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
-
-      {activeMapRequest && (
-        <VolunteerNavigationMap
-          request={activeMapRequest}
-          onClose={() => setActiveMapRequest(null)}
-          onArrived={async (reqId) => {
-            setActiveMapRequest(null);
-            try {
-              await apiService.updateVolunteerRequestStatus(reqId, 'REACHED', user);
-              showToast('Status updated to REACHED!');
-              loadRequest();
-            } catch(e) {
-              showToast('Could not update status to REACHED', 'error');
-            }
-          }}
-        />
-      )}
-
-      <button className="btn btn-secondary btn-sm" onClick={() => navigate(-1)} style={{ marginBottom: '20px' }}>
-        ← Back
-      </button>
-
-      {/* Volunteer Status Tracking Banner (for requester) */}
-      {request.volunteer && (displayStatus === 'ACTIVE' || displayStatus === 'COMPLETED') && (
-        <div className="status-tracking-banner">
-          <h3>🎉 {displayStatus === 'COMPLETED' ? 'Request Completed!' : 'Volunteer Found!'}</h3>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-            <div className="profile-avatar" style={{ width: '40px', height: '40px', fontSize: '1rem', background: 'linear-gradient(135deg, #10b981, #06b6d4)' }}>
-              {request.volunteer?.fullName?.charAt(0)}
-            </div>
-            <div>
-              <div style={{ fontWeight: 600 }}>{request.volunteer?.fullName}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                ⭐ {request.volunteer?.rating?.toFixed(1) || '5.0'} rating
-                {request.volunteer?.badge && ` • ${request.volunteer.badge}`}
-              </div>
-            </div>
-          </div>
-          {currentProgress && (
-            <div className="status-steps">
-              {STATUS_STEPS.map((step, idx) => {
-                const stepIdx = STATUS_STEPS.findIndex(s => s.key === currentProgress);
-                const isCompleted = idx < stepIdx;
-                const isActive = idx === stepIdx;
-                return (
-                  <Fragment key={step.key}>
-                    {idx > 0 && <div className={`status-step-line ${idx <= stepIdx ? 'completed' : ''}`} />}
-                    <div className={`status-step ${isCompleted ? 'completed' : ''} ${isActive ? 'active' : ''}`}>
-                      <div className="status-step-dot">{isCompleted || isActive ? step.icon : idx + 1}</div>
-                      <div className="status-step-label">{step.label}</div>
-                    </div>
-                  </Fragment>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="request-detail-grid">
+    <div className="p7-detail">
+      <Link to="/feed" className="p7-back-link">Back to feed</Link>
+      <section className="p7-detail-hero">
         <div>
-          <div className="card" style={{ marginBottom: '20px' }}>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-              <span className={`badge ${URGENCY_CLASS[request.urgency]}`}>{request.urgency}</span>
-              <span className={`badge ${STATUS_CLASS[displayStatus]}`}>{displayStatus}</span>
-              <span className="badge badge-category">{CATEGORY_ICONS[request.category]} {request.category?.replace('_', ' ')}</span>
-              {request.category === 'BLOOD_DONATION' && request.requiredBloodGroup && (
-                <span className="badge" style={{ background: 'var(--danger-color)', color: 'white', fontWeight: 'bold' }}>
-                  🩸 {request.requiredBloodGroup} Required
-                </span>
-              )}
-              {request.verificationStatus === 'FLAGGED' ? (
-                <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid currentColor' }}>
-                  ⚠️ Flagged for Review
-                </span>
-              ) : request.verificationStatus === 'VERIFIED' || request.ocrVerified ? (
-                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', border: '1px solid currentColor' }}>
-                  ✅ Verified Medical Request
-                </span>
-              ) : null}
-            </div>
-            <h1 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '12px' }}>{request.title}</h1>
-            <p style={{ color: 'var(--text-secondary)', lineHeight: '1.7', fontSize: '1rem', marginBottom: '24px' }}>{request.description}</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <div className="card" style={{ padding: '16px' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>📍 Location</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.address || 'Not specified'}</div>
-              </div>
-              <div className="card" style={{ padding: '16px' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>📞 Contact</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.contactPhone || 'Not specified'}</div>
-              </div>
-              <div className="card" style={{ padding: '16px' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>👁️ Views</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.viewCount} views • {request.responseCount} responses</div>
-              </div>
-              <div className="card" style={{ padding: '16px' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>🕐 Posted</div>
-                <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{request.createdAt ? new Date(request.createdAt).toLocaleString() : '-'}</div>
-              </div>
-            </div>
+          <div className="p7-request-card__badges">
+            <UrgencyBadge urgency={request.urgency} />
+            <StatusBadge status={status} />
+            <Badge variant="default">{String(request.category || 'GENERAL').replace(/_/g, ' ')}</Badge>
+            {request.community?.name && <Badge variant="info">{request.community.name}</Badge>}
           </div>
-
-          {request.aiSummary && (
-            <div className="card" style={{ marginBottom: '20px', border: '1px solid rgba(99,102,241,0.2)', background: 'rgba(99,102,241,0.03)' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '12px', color: 'var(--accent-primary)' }}>🤖 AI Analysis</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '12px' }}>{request.aiSummary}</p>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {request.aiCategory && <span className="badge badge-category">AI Category: {request.aiCategory}</span>}
-                {request.aiUrgency && <span className={`badge ${URGENCY_CLASS[request.aiUrgency]}`}>AI Urgency: {request.aiUrgency}</span>}
-              </div>
-            </div>
-          )}
-
-          {/* Comments Section */}
-          <div className="card comments-section">
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '16px' }}>💬 Comments & Responses ({comments.length})</h3>
-            <div className="comment-list">
-              {comments.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-                  No comments yet. Be the first to respond!
-                </div>
-              ) : (
-                comments.map(c => (
-                  <div key={c.id} className="comment-item">
-                    <div className="comment-avatar">{c.author?.charAt(0) || '?'}</div>
-                    <div className="comment-content">
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                        <span className="comment-author">{c.author}</span>
-                        <span className="comment-time">{timeAgo(c.time)}</span>
-                      </div>
-                      <div className="comment-text">{c.text}</div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-            <form className="comment-form" onSubmit={handleAddComment}>
-              <input
-                type="text"
-                placeholder="Add a comment..."
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-              />
-              <button type="submit" className="btn btn-primary btn-sm">Post</button>
-            </form>
-          </div>
-
-          {/* Timeline */}
-          <div className="card" style={{ marginTop: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>📋 Activity Timeline</h3>
-              {request.status === 'COMPLETED' && request.totalResponseTimeMinutes && (
-                <div className="badge" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '4px 12px' }}>
-                  Total Response Time: <strong>{request.totalResponseTimeMinutes} minutes</strong>
-                </div>
-              )}
-            </div>
-
-            <div className="timeline-container" style={{ position: 'relative', paddingLeft: '32px' }}>
-              {/* Vertical Line */}
-              <div style={{ 
-                position: 'absolute', 
-                left: '7px', 
-                top: '10px', 
-                bottom: '10px', 
-                width: '2px', 
-                background: 'rgba(255,255,255,0.05)' 
-              }} />
-
-              {(request.timeline || []).length === 0 ? (
-                <div style={{ padding: '8px 0', color: 'var(--text-muted)' }}>No activity recorded yet.</div>
-              ) : (
-                request.timeline.map((entry, idx) => {
-                  const meta = EVENT_META[entry.event] || { icon: '•', label: entry.event, color: 'gray' };
-                  const colorMap = {
-                    green: '#10b981',
-                    red: '#ef4444',
-                    blue: '#3b82f6',
-                    gray: 'var(--text-muted)'
-                  };
-
-                  return (
-                    <div key={idx} style={{ position: 'relative', marginBottom: '24px' }}>
-                      {/* Dot */}
-                      <div style={{ 
-                        position: 'absolute', 
-                        left: '-32px', 
-                        top: '4px', 
-                        width: '16px', 
-                        height: '16px', 
-                        borderRadius: '50%', 
-                        background: 'var(--card-bg)', 
-                        border: `3px solid ${colorMap[meta.color]}`,
-                        zIndex: 2,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '8px'
-                      }} />
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
-                            <span style={{ fontSize: '1.1rem' }}>{meta.icon}</span>
-                            <span style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{meta.label}</span>
-                          </div>
-                          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {entry.actorName && (
-                              <span style={{ 
-                                color: meta.color === 'gray' ? 'var(--text-muted)' : colorMap[meta.color],
-                                fontWeight: 500 
-                              }}>
-                                {entry.actorName}
-                              </span>
-                            )}
-                            {entry.actorName && ' • '}
-                            <span>{new Date(entry.timestamp).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
-                          </div>
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', paddingTop: '4px' }}>
-                          {timeAgo(entry.timestamp)}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+          <h1>{request.title}</h1>
+          <p>{request.description}</p>
+          <div className="p7-detail-meta">
+            <span><Clock size={16} /> {timeAgo(request.createdAtEpochMs || request.createdAt)}</span>
+            <span><MapPin size={16} /> {safeLocation(request)}</span>
+            {request.distanceKm != null && <span>{Number(request.distanceKm).toFixed(1)} km away</span>}
           </div>
         </div>
+      </section>
 
-        <div>
-          <div className="card" style={{ marginBottom: '16px' }}>
-            <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Requester</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div className="profile-avatar" style={{ width: '48px', height: '48px', fontSize: '1.2rem' }}>
-                {request.requester?.fullName?.charAt(0) || '?'}
-              </div>
-              <div>
-                <div style={{ fontWeight: 600 }}>{request.requester?.fullName || 'Anonymous'}</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>⭐ {request.requester?.rating?.toFixed(1) || '5.0'} rating</div>
-              </div>
+      <div className="p7-detail-layout">
+        <main className="p7-detail-main">
+          <Card className="p7-detail-card">
+            <div className="p7-section-heading">
+              <h2>Request Summary</h2>
+              <p>Visible details are intentionally practical and safe.</p>
             </div>
-          </div>
-
-          {request.volunteer && (
-            <div className="card" style={{ marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Volunteer</h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div className="profile-avatar" style={{ width: '48px', height: '48px', fontSize: '1.2rem', background: 'linear-gradient(135deg, #10b981, #06b6d4)' }}>
-                  {request.volunteer?.fullName?.charAt(0)}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{request.volunteer?.fullName}</div>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    ⭐ {request.volunteer?.rating?.toFixed(1) || '5.0'} rating
-                    {request.volunteer?.badge && (
-                      <span style={{ marginLeft: '8px', padding: '2px 8px', background: 'rgba(16,185,129,0.15)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', color: '#10b981' }}>
-                        {request.volunteer.badge}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
+            <div className="p7-summary-grid">
+              <div><span>Request ID</span><strong>{request.id}</strong></div>
+              <div><span>Category</span><strong>{String(request.category || 'GENERAL').replace(/_/g, ' ')}</strong></div>
+              <div><span>Status</span><strong>{status.replace(/_/g, ' ')}</strong></div>
+              <div><span>Urgency</span><strong>{request.urgency || 'MEDIUM'}</strong></div>
+              <div><span>Location</span><strong>{safeLocation(request)}</strong></div>
+              <div><span>Contact</span><strong>{request.contactPhone || request.contact || 'Use in-app updates'}</strong></div>
+              {request.distanceKm != null && <div><span>Distance</span><strong>{Number(request.distanceKm).toFixed(1)} km</strong></div>}
+              <div><span>Created</span><strong>{request.createdAtEpochMs || request.createdAt ? timeAgo(request.createdAtEpochMs || request.createdAt) : 'Recently'}</strong></div>
+              <div><span>Views</span><strong>{request.viewCount ?? request.views ?? 0}</strong></div>
+              <div><span>Responses</span><strong>{request.responseCount ?? request.responses ?? 0}</strong></div>
             </div>
-          )}
+          </Card>
+          <Timeline request={request} />
+          <Comments
+            comments={comments}
+            value={commentText}
+            onChange={setCommentText}
+            onSubmit={addComment}
+            submitting={commenting}
+            user={user}
+            deletingComment={deletingComment}
+            onDeleteComment={(comment) => requestConfirmation({
+              key: `delete-comment-${comment.id}`,
+              label: 'Delete Comment',
+              run: () => deleteComment(comment),
+            }, 'Delete this comment from the request?')}
+          />
+        </main>
 
-          {request.community && (
-            <div className="card" style={{ marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '8px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Community</h3>
-              <div style={{ fontWeight: 600 }}>🏘️ {request.community.name}</div>
+        <aside className="p7-action-panel">
+          <Card>
+            <div className="p7-section-heading">
+              <h2>Action Panel</h2>
+              <p>{isRequester ? 'Requester controls' : isVolunteer ? 'Volunteer controls' : 'Available actions'}</p>
             </div>
-          )}
+            {primaryAction ? (
+              <Button
+                type="button"
+                size="lg"
+                variant={primaryAction.kind}
+                loading={actionLoading === primaryAction.key}
+                onClick={() => runAction(primaryAction)}
+              >
+                {ActionIcon && <ActionIcon size={18} />} {primaryAction.label}
+              </Button>
+            ) : (
+              <Alert title={isRequester ? 'Request availability' : 'No action available'}>
+                {isRequester ? 'Use the availability controls below for open or closed requests.' : 'This request does not have an action available for your current role and state.'}
+              </Alert>
+            )}
 
-          <div className="card" style={{ borderColor: 'var(--border-active)' }}>
-            <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '16px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Actions</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {/* Bookmark & Share */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
-                <button
-                  className={`btn btn-sm ${isBookmarked(request.id) ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => toggleBookmark(request.id)}
-                  style={{ flex: 1, justifyContent: 'center' }}
+            {isRequester && (status === 'OPEN' || status === 'CANCELLED') && (
+              <div className="p7-action-toggle" role="group" aria-label="Request availability">
+                <Button
+                  type="button"
+                  variant={status === 'OPEN' ? 'primary' : 'secondary'}
+                  loading={actionLoading === 'keep-open'}
+                  onClick={() => runAction({ key: 'keep-open', label: 'Keep Open', run: () => apiService.updateRequestAvailability(id, 'OPEN') })}
                 >
-                  {isBookmarked(request.id) ? '🔖 Saved' : '🔖 Save'}
-                </button>
-                <ShareDropdown request={request} />
+                  <CheckCircle2 size={16} /> Keep Open
+                </Button>
+                <Button
+                  type="button"
+                  variant={status === 'CANCELLED' ? 'primary' : 'secondary'}
+                  loading={actionLoading === 'close'}
+                  onClick={() => requestConfirmation({
+                    key: 'close',
+                    label: 'Close Request',
+                    run: () => apiService.updateRequestAvailability(id, 'CLOSED'),
+                  }, 'Close this request so volunteers no longer see it as open?')}
+                >
+                  <XCircle size={16} /> Close Request
+                </Button>
               </div>
+            )}
 
-              {request.status === 'OPEN' && !isRequester && user?.isVolunteer && aiSuggestion && (
-                <div className="card" style={{ padding: '12px', background: 'rgba(99,102,241,0.05)', border: '1px solid var(--accent-primary)', marginBottom: '8px' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--accent-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    ✨ Response Assistant
-                  </div>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '12px', lineHeight: 1.5 }}>
-                    "{aiSuggestion.volunteer_message}"
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
-                    <div style={{ fontSize: '0.7rem', background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
-                      🕒 Reach in {aiSuggestion.estimated_time_to_reach}
-                    </div>
-                    {aiSuggestion.safety_tips?.slice(0, 1).map((tip, i) => (
-                      <div key={i} style={{ fontSize: '0.7rem', background: 'rgba(239,68,68,0.05)', padding: '2px 8px', borderRadius: '4px', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.1)' }}>
-                        ⚠️ {tip}
-                      </div>
-                    ))}
-                  </div>
-                  <button className="btn btn-secondary btn-sm" onClick={useAiSuggestion} style={{ width: '100%', justifyContent: 'center', fontSize: '0.8rem' }}>
-                    Use this Message
-                  </button>
-                </div>
-              )}
+            {activeVolunteerState && isVolunteer && (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => requestConfirmation({
+                  key: 'withdraw',
+                  label: 'Withdraw',
+                  run: () => apiService.withdrawRequest(id),
+                }, 'Withdraw from this request? The requester will need another volunteer.')}
+                loading={actionLoading === 'withdraw'}
+              >
+                <XCircle size={16} /> Withdraw
+              </Button>
+            )}
 
-              {request.status === 'OPEN' && !isRequester && user?.isVolunteer && (
-                <button className="btn btn-primary" onClick={handleAccept} style={{ width: '100%', justifyContent: 'center' }}>
-                  🙋 I Can Help
-                </button>
-              )}
-              {request.status === 'OPEN' && !isRequester && !user?.isVolunteer && (
-                <>
-                  <Link to="/volunteer/settings" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                    Enable Volunteer Mode
-                  </Link>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                    Turn on volunteer mode first, then come back here to accept this request.
-                  </div>
-                </>
-              )}
-              {(displayStatus === 'ACTIVE') && isVolunteer && request.volunteerProgressStatus !== 'COMPLETED' && request.latitude && request.longitude && (
-                <button className="btn btn-primary" onClick={() => setActiveMapRequest(request)} style={{ width: '100%', justifyContent: 'center' }}>
-                  📍 Show Navigation Map
-                </button>
-              )}
-              {(displayStatus === 'ACTIVE') && (isRequester || isVolunteer) && (
-                <button className="btn btn-success" onClick={handleComplete} style={{ width: '100%', justifyContent: 'center' }}>
-                  ✅ Mark as Completed
-                </button>
-              )}
-              {(request.status === 'OPEN' || displayStatus === 'ACTIVE') && isRequester && (
-                <button className="btn btn-danger" onClick={handleCancel} style={{ width: '100%', justifyContent: 'center' }}>
-                  ❌ Cancel Request
-                </button>
-              )}
-              {request.status === 'COMPLETED' && (
-                <div style={{ textAlign: 'center', padding: '12px', color: 'var(--success)', fontWeight: 600 }}>
-                  ✅ This request has been completed
-                </div>
-              )}
-              {request.status === 'CANCELLED' && (
-                <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                  This request was cancelled
-                </div>
-              )}
+            {isPendingCompletion && isRequester && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => requestConfirmation({
+                  key: 'reject',
+                  label: 'Reject Completion',
+                  run: () => apiService.rejectRequestCompletion(id, user),
+                }, 'Reject completion and return the request to active help?')}
+                loading={actionLoading === 'reject'}
+              >
+                <RotateCcw size={16} /> Reject Completion
+              </Button>
+            )}
+
+            {(activeVolunteerState || isPendingCompletion) && isRequester && (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => requestConfirmation({
+                  key: 'cancel',
+                  label: 'Cancel Request',
+                  run: () => apiService.cancelRequest(id),
+                }, 'Cancel this help request? Volunteers will no longer be able to accept it.')}
+                loading={actionLoading === 'cancel'}
+              >
+                <XCircle size={16} /> Cancel Request
+              </Button>
+            )}
+
+            {isRequester && (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => requestConfirmation({
+                  key: 'delete',
+                  label: 'Delete Request',
+                  run: () => apiService.deleteRequest(id),
+                }, 'Permanently delete this request and its request-specific records? This cannot be undone.')}
+                loading={actionLoading === 'delete'}
+              >
+                <Trash2 size={16} /> Delete Request
+              </Button>
+            )}
+          </Card>
+
+          <Card>
+            <div className="p7-section-heading">
+              <h2>People</h2>
+              <p>Public-safe participant details.</p>
             </div>
-          </div>
+            <UserSummary user={request.requester || { name: request.requesterName || 'Requester', role: 'Requester' }} />
+            {request.volunteer ? <UserSummary user={{ ...request.volunteer, role: 'Volunteer' }} /> : <p className="p7-muted"><UserRound size={16} /> No volunteer assigned yet.</p>}
+          </Card>
 
-          {/* Rating Result */}
-          {request.volunteerRating && (
-            <div className="card" style={{ marginTop: '16px', border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.05)' }}>
-              <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '8px', color: '#10b981' }}>⭐ Volunteer Rating</h3>
-              <div style={{ fontSize: '1.5rem', marginBottom: '4px' }}>{'⭐'.repeat(request.volunteerRating)}</div>
-              {request.volunteerFeedback && (
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>"{request.volunteerFeedback}"</div>
-              )}
-            </div>
-          )}
-        </div>
+          <Card className="p7-safety-note">
+            <AlertTriangle size={20} />
+            <strong>Safety reminder</strong>
+            <p>Keep sensitive documents, exact private details, and payments out of comments. Use status updates for coordination.</p>
+          </Card>
+        </aside>
       </div>
 
-      {/* Rating Modal */}
-      {showRating && request.status === 'COMPLETED' && isRequester && !request.requesterRated && (
-        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowRating(false); }}>
-          <div className="modal" style={{ maxWidth: '420px', textAlign: 'center' }}>
-            <h2 style={{ marginBottom: '8px' }}>⭐ Rate Your Volunteer</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-              How was your experience with <strong>{request.volunteer?.fullName}</strong>?
-            </p>
-
-            <div className="rating-stars">
-              {[1, 2, 3, 4, 5].map(star => (
-                <button
-                  key={star}
-                  className={`rating-star ${star <= rating ? 'active' : ''}`}
-                  onClick={() => setRating(star)}
-                  type="button"
-                >
-                  ⭐
-                </button>
-              ))}
-            </div>
-
-            <div className="form-group">
-              <textarea
-                className="form-textarea"
-                placeholder="Optional feedback..."
-                value={ratingFeedback}
-                onChange={(e) => setRatingFeedback(e.target.value)}
-                rows={3}
-                style={{ resize: 'vertical' }}
-              />
-            </div>
-
-            <div className="modal-actions" style={{ justifyContent: 'center' }}>
-              <button className="btn btn-secondary" onClick={() => setShowRating(false)}>Skip</button>
-              <button className="btn btn-primary" onClick={handleSubmitRating} disabled={ratingLoading}>
-                {ratingLoading ? 'Submitting...' : '✨ Submit Rating'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmationDialog
+        open={Boolean(confirmAction)}
+        title={confirmAction?.label}
+        message={confirmAction?.message}
+        confirmLabel={confirmAction?.label}
+        destructive
+        loading={actionLoading === confirmAction?.key}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={async () => {
+          const action = confirmAction;
+          setConfirmAction(null);
+          await runAction(action);
+        }}
+      />
     </div>
   );
 }

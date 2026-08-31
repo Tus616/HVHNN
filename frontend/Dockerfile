@@ -4,7 +4,6 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-ENV VITE_API_URL=http://localhost:8080/api
 RUN npm run build
 
 # Production stage

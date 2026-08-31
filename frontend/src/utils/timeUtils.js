@@ -1,5 +1,5 @@
 /**
- * Shared time formatting utilities for HVHN.
+ * Shared time formatting utilities for Sahay.
  */
 
 /**

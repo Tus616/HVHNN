@@ -17,6 +17,8 @@ public class UserPresence {
 
     private PresenceStatus status = PresenceStatus.OFFLINE;
     private LocalDateTime lastSeen;
+    private int activeSessionCount;
+    private LocalDateTime updatedAt;
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -29,4 +31,10 @@ public class UserPresence {
 
     public LocalDateTime getLastSeen() { return lastSeen; }
     public void setLastSeen(LocalDateTime lastSeen) { this.lastSeen = lastSeen; }
+
+    public int getActiveSessionCount() { return activeSessionCount; }
+    public void setActiveSessionCount(int activeSessionCount) { this.activeSessionCount = activeSessionCount; }
+
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

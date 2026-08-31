@@ -61,7 +61,7 @@ public class HvhnAiService {
 
         if (gemini.isAvailable()) {
             try {
-                String prompt = "You are HVHN-AI. Analyze this help request text (may be Hindi/English/Hinglish). "
+                String prompt = "You are Sahay AI. Analyze this help request text (may be Hindi/English/Hinglish). "
                     + "Return ONLY valid JSON with these fields: "
                     + "language_detected (hi/en/hinglish/other), "
                     + "category (blood_donation/medical_emergency/food_support/shelter/transport/financial/general_help/other), "

@@ -7,12 +7,15 @@ import com.hvhn.backend.dto.FirebaseAuthRequest;
 import com.hvhn.backend.dto.FirebaseTokenRequest;
 import com.hvhn.backend.dto.FirebaseTokenResponse;
 import com.hvhn.backend.dto.OtpStatusResponse;
+import com.hvhn.backend.dto.RegisterVerifyRequest;
 import com.hvhn.backend.dto.RegisterRequest;
 import com.hvhn.backend.dto.VerifyOtpRequest;
 import com.hvhn.backend.service.AuthService;
 import com.hvhn.backend.service.EmailOtpService;
 import com.hvhn.backend.service.FirebaseService;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,14 +39,34 @@ public class AuthController {
         return ResponseEntity.ok(authService.register(request));
     }
 
+    @PostMapping("/api/auth/register/request-otp")
+    public ResponseEntity<OtpStatusResponse> requestRegistrationOtp(
+            @Valid @RequestBody EmailOtpRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        return ResponseEntity.ok(emailOtpService.sendRegistrationOtp(
+                request.getEmail(),
+                servletRequest.getRemoteAddr(),
+                servletRequest.getHeader("User-Agent")
+        ));
+    }
+
+    @PostMapping("/api/auth/register/verify")
+    public ResponseEntity<AuthResponse> verifyRegistration(@Valid @RequestBody RegisterVerifyRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(authService.verifyRegistration(request));
+    }
+
     @PostMapping("/api/auth/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody AuthRequest request) {
         return ResponseEntity.ok(authService.login(request));
     }
 
     @PostMapping("/api/auth/send-otp")
-    public ResponseEntity<OtpStatusResponse> sendOtp(@Valid @RequestBody EmailOtpRequest request) {
-        return ResponseEntity.ok(emailOtpService.sendOtp(request.getEmail()));
+    public ResponseEntity<OtpStatusResponse> sendOtp(
+            @Valid @RequestBody EmailOtpRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        return requestRegistrationOtp(request, servletRequest);
     }
 
     @PostMapping("/api/auth/verify-otp")

@@ -3,6 +3,7 @@ import { MessageSquarePlus, Users } from 'lucide-react';
 import apiService from '../../services/api';
 import useChatSocket from '../../hooks/useChatSocket';
 import { getMemberQuickReplies, matchesCurrentUser } from '../../utils/communityHub';
+import { getStoredToken } from '../../utils/sessionStorage';
 import ChatWindow from './ChatWindow';
 import OnlineStatus from './OnlineStatus';
 import UnreadBadge from './UnreadBadge';
@@ -61,7 +62,7 @@ export default function CommunityChatPanel({
   const [selectedGroupEmails, setSelectedGroupEmails] = useState([]);
   const [savingRoom, setSavingRoom] = useState(false);
 
-  const token = user?.token || window.localStorage.getItem('hvhn_token') || '';
+  const token = user?.token || getStoredToken() || '';
   const {
     messages: liveMessages,
     sendMessage,
@@ -98,7 +99,7 @@ export default function CommunityChatPanel({
     setChatRooms((current) => nextRooms.reduce((rooms, nextRoom) => upsertRoom(rooms, nextRoom), current));
   }, [roomUpdates]);
 
-  const communityRooms = chatRooms.filter((room) => {
+  const communityRooms = (Array.isArray(chatRooms) ? chatRooms : []).filter((room) => {
     if (room.type === 'GROUP') {
       return room.participants?.some((participant) => members.some((member) => samePerson(participant, member)));
     }
@@ -112,7 +113,7 @@ export default function CommunityChatPanel({
   }, [communityRooms.length, onConnectedCountChange]);
 
   useEffect(() => {
-    const connectedMembers = members.filter((member) => (
+    const connectedMembers = (Array.isArray(members) ? members : []).filter((member) => (
       communityRooms.some((room) => room.participants?.some((participant) => samePerson(participant, member)))
     ));
     onConnectedMembersChange?.(connectedMembers);
@@ -199,21 +200,6 @@ export default function CommunityChatPanel({
     return didSend;
   }
 
-  async function handleUploadAttachment(file) {
-    try {
-      const response = await apiService.uploadChatAttachment(file);
-      const { url, fileName, contentType } = response.data;
-      const attachmentMessage = `attachment:${url}|${fileName}|${contentType || ''}`;
-      const didSend = sendMessage(attachmentMessage);
-
-      if (!didSend) {
-        showToast?.('Upload worked, but the socket is disconnected. Reconnect and try sending again.', 'error');
-      }
-    } catch (error) {
-      showToast?.(error.message || 'We could not upload that file.', 'error');
-    }
-  }
-
   async function handleMessagesRead(messageId) {
     if (!activeRoomId || !messageId) return;
 
@@ -263,7 +249,7 @@ export default function CommunityChatPanel({
             onChange={(event) => setGroupName(event.target.value)}
           />
           <div className="chat-group-member-grid">
-            {members.filter((member) => member.email).map((member) => {
+            {(Array.isArray(members) ? members : []).filter((member) => member.email).map((member) => {
               const checked = selectedGroupEmails.includes(member.email);
               return (
                 <label key={member.email} className={`chat-group-option ${checked ? 'active' : ''}`}>
@@ -273,7 +259,7 @@ export default function CommunityChatPanel({
                     onChange={() => {
                       setSelectedGroupEmails((current) => (
                         checked
-                          ? current.filter((email) => email !== member.email)
+                          ? (Array.isArray(current) ? current : []).filter((email) => email !== member.email)
                           : [...current, member.email]
                       ));
                     }}
@@ -357,7 +343,6 @@ export default function CommunityChatPanel({
             connectionStatus={connectionStatus}
             onSendMessage={handleSendMessage}
             onTypingChange={sendTyping}
-            onUploadAttachment={handleUploadAttachment}
             onMessagesRead={handleMessagesRead}
             onDeleteMessage={apiService.deleteChatMessage}
             prefillText={composerPrefill}

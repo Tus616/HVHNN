@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.NoSuchElementException;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -103,7 +104,18 @@ public class GlobalExceptionHandler {
             RuntimeException exception,
             HttpServletRequest request
     ) {
-        return buildErrorResponse(HttpStatus.BAD_REQUEST, exception.getMessage(), request.getRequestURI());
+        logger.error("Unexpected runtime exception type={} path={} message={}",
+                exception.getClass().getName(),
+                request.getRequestURI(),
+                exception.getMessage(),
+                exception
+        );
+        return buildErrorResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "An unexpected error occurred",
+                request.getRequestURI(),
+                request
+        );
     }
 
     @ExceptionHandler(Exception.class)
@@ -114,8 +126,9 @@ public class GlobalExceptionHandler {
         logger.error("Unexpected server error for path={}", request.getRequestURI(), exception);
         return buildErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR,
-                "An unexpected server error occurred",
-                request.getRequestURI()
+                "An unexpected error occurred",
+                request.getRequestURI(),
+                request
         );
     }
 
@@ -124,12 +137,26 @@ public class GlobalExceptionHandler {
             String message,
             String path
     ) {
+        return buildErrorResponse(status, message, path, null);
+    }
+
+    private ResponseEntity<ApiErrorResponse> buildErrorResponse(
+            HttpStatus status,
+            String message,
+            String path,
+            HttpServletRequest request
+    ) {
+        String requestId = request != null && request.getAttribute("requestId") != null
+                ? String.valueOf(request.getAttribute("requestId"))
+                : UUID.randomUUID().toString();
         ApiErrorResponse errorResponse = new ApiErrorResponse(
                 status.value(),
                 status.getReasonPhrase(),
                 message,
-                path
+                path,
+                requestId
         );
+        logger.warn("API error requestId={} status={} path={} message={}", requestId, status.value(), path, message);
         return ResponseEntity.status(status).body(errorResponse);
     }
 }

@@ -5,12 +5,16 @@ import AdminLoadingState from '../../components/admin/AdminLoadingState';
 import AdminModal from '../../components/admin/AdminModal';
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import { adminApi } from '../../services/adminApi';
+import { ConfirmationDialog, ErrorState } from '../../components/ui';
+import { normalizeApiError } from '../../utils/errors';
 
 export default function AdminCommunitiesPage() {
   const { user, showToast, isSuperAdmin } = useOutletContext();
   const [communities, setCommunities] = useState([]);
   const [selectedCommunity, setSelectedCommunity] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -19,12 +23,13 @@ export default function AdminCommunitiesPage() {
       setLoading(true);
 
       try {
+        setError('');
         const response = await adminApi.getCommunities(user);
         if (!active) return;
         setCommunities(response.data);
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin communities.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -45,6 +50,10 @@ export default function AdminCommunitiesPage() {
     return <AdminLoadingState label="Loading community management..." />;
   }
 
+  if (error) {
+    return <ErrorState message={error} />;
+  }
+
   async function handleCommunityAction(action, community) {
     try {
       if (action === 'approve') {
@@ -61,8 +70,9 @@ export default function AdminCommunitiesPage() {
         showToast({ type: 'warning', title: 'Community deactivated', message: `${community.name} has been deactivated.` });
       }
     } catch (error) {
-      console.error(error);
-      showToast({ type: 'danger', title: 'Action failed', message: 'Please try again.' });
+      showToast({ type: 'danger', title: 'Action failed', message: normalizeApiError(error, 'Please try again.').message });
+    } finally {
+      setConfirmation(null);
     }
   }
 
@@ -117,7 +127,7 @@ export default function AdminCommunitiesPage() {
                 <button type="button" className="admin-btn admin-btn-secondary" onClick={() => setSelectedCommunity(community)}>
                   View Detail
                 </button>
-                <button type="button" className="admin-btn admin-btn-danger" onClick={() => handleCommunityAction('deactivate', community)}>
+                <button type="button" className="admin-btn admin-btn-danger" onClick={() => setConfirmation({ action: 'deactivate', community })}>
                   Deactivate
                 </button>
               </div>
@@ -161,6 +171,15 @@ export default function AdminCommunitiesPage() {
           </div>
         )}
       </AdminModal>
+      <ConfirmationDialog
+        open={Boolean(confirmation)}
+        title="Deactivate community?"
+        message={`${confirmation?.community?.name || 'This community'} will be marked inactive. Members are not deleted.`}
+        confirmLabel="Deactivate"
+        destructive
+        onClose={() => setConfirmation(null)}
+        onConfirm={() => handleCommunityAction(confirmation.action, confirmation.community)}
+      />
     </div>
   );
 }

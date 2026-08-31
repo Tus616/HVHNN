@@ -227,7 +227,7 @@ public class DataInitializer implements CommandLineRunner {
         req4.setResponseCount(5);
         helpRequestRepository.save(req4);
 
-        System.out.println("=== HVHN Demo Data Initialized ===");
+        System.out.println("=== Sahay Demo Data Initialized ===");
         System.out.println("Admin: admin@hvhn.com / admin123");
         System.out.println("User1: rahul@example.com / pass123");
         System.out.println("User2: priya@example.com / pass123");

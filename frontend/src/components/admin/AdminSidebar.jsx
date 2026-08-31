@@ -8,6 +8,7 @@ import {
   Users,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
+import BrandLogo from '../BrandLogo';
 
 const NAV_ITEMS = [
   { to: '/admin/overview', label: 'Overview', icon: Home, roles: ['SUPER_ADMIN', 'COMMUNITY_ADMIN'] },
@@ -23,7 +24,7 @@ export default function AdminSidebar({ role }) {
   return (
     <aside className="admin-sidebar">
       <div className="admin-sidebar-brand">
-        <div className="admin-sidebar-badge">HVHN</div>
+        <BrandLogo variant="mark" />
         <div>
           <strong>Admin Dashboard</strong>
           <span>{role === 'SUPER_ADMIN' ? 'Platform scope' : 'Community scope'}</span>

@@ -14,11 +14,14 @@ import {
 import AdminEmptyState from '../../components/admin/AdminEmptyState';
 import AdminLoadingState from '../../components/admin/AdminLoadingState';
 import { adminApi } from '../../services/adminApi';
+import { ErrorState } from '../../components/ui';
+import { normalizeApiError } from '../../utils/errors';
 
 export default function AdminAnalyticsPage() {
   const { user, showToast } = useOutletContext();
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -27,6 +30,7 @@ export default function AdminAnalyticsPage() {
       setLoading(true);
 
       try {
+        setError('');
         const response = await adminApi.getAnalytics(user);
         if (!active) return;
         setAnalytics(response.data);
@@ -34,13 +38,13 @@ export default function AdminAnalyticsPage() {
         if (response.fallback) {
           showToast({
             type: 'info',
-            title: 'Using fallback analytics',
-            message: 'The charts are being filled with safe mock data until the backend analytics endpoint is ready.',
+            title: 'Using derived analytics',
+            message: 'Charts are based on the admin data currently available.',
           });
         }
       } catch (error) {
         if (!active) return;
-        console.error(error);
+        setError(normalizeApiError(error, 'Could not load admin analytics.').message);
       } finally {
         if (active) setLoading(false);
       }
@@ -55,6 +59,10 @@ export default function AdminAnalyticsPage() {
 
   if (loading) {
     return <AdminLoadingState label="Loading analytics..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
   }
 
   if (!analytics) {
@@ -72,7 +80,7 @@ export default function AdminAnalyticsPage() {
         <div>
           <p className="admin-page-eyebrow">Analytics</p>
           <h2>Response and category insights</h2>
-          <p>Understand weekly trends, category mix, and top volunteer performance.</p>
+          <p>Review request totals, category mix, and volunteer activity.</p>
         </div>
       </section>
 
@@ -82,19 +90,24 @@ export default function AdminAnalyticsPage() {
             <div>
               <h3>Requests Per Day</h3>
               <p>Last 7 days</p>
+              <p>Counts only; no generated growth trends.</p>
             </div>
           </div>
 
-          <div className="admin-chart-shell">
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={analytics.requestsPerDay}>
-                <XAxis dataKey="day" />
-                <YAxis allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="requests" fill="#2563eb" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {analytics.requestsPerDay?.some((entry) => entry.requests > 0) ? (
+            <div className="admin-chart-shell">
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={analytics.requestsPerDay}>
+                  <XAxis dataKey="day" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="requests" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <AdminEmptyState title="No request trend yet" description="Request activity will appear here once requests exist." />
+          )}
         </div>
 
         <div className="admin-card">
@@ -105,32 +118,36 @@ export default function AdminAnalyticsPage() {
             </div>
           </div>
 
-          <div className="admin-chart-shell">
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart>
-                <Pie
-                  data={analytics.categoryBreakdown}
-                  dataKey="value"
-                  nameKey="name"
-                  outerRadius={88}
-                  innerRadius={48}
-                  paddingAngle={4}
-                >
-                  {analytics.categoryBreakdown.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          {analytics.categoryBreakdown?.some((entry) => entry.value > 0) ? (
+            <div className="admin-chart-shell">
+              <ResponsiveContainer width="100%" height={280}>
+                <PieChart>
+                  <Pie
+                    data={analytics.categoryBreakdown}
+                    dataKey="value"
+                    nameKey="name"
+                    outerRadius={88}
+                    innerRadius={48}
+                    paddingAngle={4}
+                  >
+                    {analytics.categoryBreakdown.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <AdminEmptyState title="No category data yet" description="Category breakdown will appear after requests are created." />
+          )}
 
           <div className="admin-legend">
             {analytics.categoryBreakdown.map((entry) => (
               <div key={entry.name} className="admin-legend-item">
                 <span className="admin-legend-dot" style={{ backgroundColor: entry.color }} />
                 <span>{entry.name}</span>
-                <strong>{entry.value}%</strong>
+                <strong>{entry.value}</strong>
               </div>
             ))}
           </div>
@@ -167,7 +184,11 @@ export default function AdminAnalyticsPage() {
                 </tr>
               </thead>
               <tbody>
-                {analytics.topVolunteers.map((volunteer, index) => (
+                {analytics.topVolunteers.length === 0 ? (
+                  <tr>
+                    <td colSpan={4}>No volunteer completion data yet.</td>
+                  </tr>
+                ) : analytics.topVolunteers.map((volunteer, index) => (
                   <tr key={volunteer.id}>
                     <td>{index + 1}</td>
                     <td>{volunteer.name}</td>

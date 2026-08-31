@@ -18,9 +18,15 @@ public class UserViewMapper {
 
         map.put("id", user.getId());
         map.put("email", user.getEmail());
+        map.put("normalizedEmail", user.getNormalizedEmail() != null ? user.getNormalizedEmail() : user.getEmail());
         map.put("fullName", user.getFullName());
         map.put("phone", user.getPhone());
+        map.put("profileImage", user.getProfileImage());
+        map.put("avatarUrl", user.getProfileImage());
         map.put("role", user.getRole());
+        map.put("authProvider", user.getAuthProvider());
+        map.put("accountStatus", user.getAccountStatus());
+        map.put("emailVerified", user.isEmailVerified());
         map.put("points", user.getPoints());
         map.put("requestsHelped", Math.max(user.getRequestsHelped(), totalHelpCount));
         map.put("requestsCreated", user.getRequestsCreated());
@@ -31,9 +37,20 @@ public class UserViewMapper {
         map.put("latitude", user.getLatitude());
         map.put("longitude", user.getLongitude());
         map.put("address", user.getAddress());
+        map.put("city", user.getCity());
+        map.put("district", user.getDistrict());
+        map.put("state", user.getState());
+        map.put("postalCode", user.getPostalCode());
+        map.put("locationSource", user.getLocationSource());
+        map.put("locationUpdatedAt", user.getLocationUpdatedAt() != null ? user.getLocationUpdatedAt().toString() : null);
         map.put("isVolunteer", user.isVolunteer());
+        map.put("volunteerEnabled", user.isVolunteer());
         map.put("volunteerStatus", user.getVolunteerStatus());
         map.put("volunteerCategories", user.getVolunteerCategories());
+        map.put("volunteerSetupCompletedAt", user.getVolunteerSetupCompletedAt());
+        map.put("onboardingCompleted", user.isOnboardingCompleted());
+        map.put("onboardingCompletedAt", user.getOnboardingCompletedAt());
+        map.put("onboardingVersion", user.getOnboardingVersion());
         map.put("totalHelpCount", totalHelpCount);
         map.put("bio", user.getBio());
         map.put("bloodGroup", user.getBloodGroup());

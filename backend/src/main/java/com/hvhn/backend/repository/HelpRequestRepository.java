@@ -9,6 +9,7 @@ import java.util.List;
 @Repository
 public interface HelpRequestRepository extends MongoRepository<HelpRequest, String> {
     List<HelpRequest> findByStatus(String status);
+    List<HelpRequest> findByStatusInOrderByCreatedAtDesc(List<String> statuses);
     List<HelpRequest> findByRequesterId(String requesterId);
     List<HelpRequest> findByVolunteerId(String volunteerId);
     List<HelpRequest> findByVolunteerIdOrderByCreatedAtDesc(String volunteerId);

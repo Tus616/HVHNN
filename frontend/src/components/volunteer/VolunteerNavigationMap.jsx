@@ -114,12 +114,12 @@ export default function VolunteerNavigationMap({ request, onClose, onArrived }) 
     : `https://www.google.com/maps?q=${reqLat},${reqLng}`;
 
   return (
-    <div className="map-modal-overlay">
+    <div className="map-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}>
       <div className="map-modal-container">
         
         {/* Top Info Bar */}
         <div className="map-info-bar">
-          <div>
+          <div style={{ flex: 1 }}>
             <h3 className="map-title text-black">Navigating to Requester</h3>
             {distance && eta && !error && (
               <div className="map-stats">
@@ -130,11 +130,9 @@ export default function VolunteerNavigationMap({ request, onClose, onArrived }) 
             {error && <div className="text-sm" style={{color: '#ef4444', fontWeight: 600, marginTop: '4px'}}>{error}</div>}
           </div>
           
-          {onClose && (
-            <button className="map-close-btn" onClick={onClose} title="Close Map">
-              <X size={24} />
-            </button>
-          )}
+          <button className="map-close-btn" onClick={onClose} title="Close Map">
+            <X size={22} />
+          </button>
         </div>
 
         {/* Map Area */}

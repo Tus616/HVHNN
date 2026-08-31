@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,13 +25,16 @@ public class FirebaseConfig {
     private static final Logger logger = LoggerFactory.getLogger(FirebaseConfig.class);
     private static final Object FIREBASE_INIT_MONITOR = new Object();
 
-    private final Resource serviceAccountResource;
+    private final String serviceAccountPath;
+    private final ResourceLoader resourceLoader;
 
     public FirebaseConfig(
-            @Value("${firebase.service-account.path:classpath:firebase/serviceAccountKey.json}")
-            Resource serviceAccountResource
+            @Value("${firebase.service-account.path:}")
+            String serviceAccountPath,
+            ResourceLoader resourceLoader
     ) {
-        this.serviceAccountResource = serviceAccountResource;
+        this.serviceAccountPath = serviceAccountPath;
+        this.resourceLoader = resourceLoader;
     }
 
     @Bean
@@ -40,35 +45,62 @@ public class FirebaseConfig {
             if (!FirebaseApp.getApps().isEmpty()) {
                 FirebaseApp existingApp = FirebaseApp.getInstance();
                 logger.info(
-                        "Reusing existing Firebase app '{}' from {}. serverTimeUtc={} zoneId={}",
+                        "Reusing existing Firebase app '{}'. serverTimeUtc={} zoneId={}",
                         existingApp.getName(),
-                        serviceAccountResource.getDescription(),
                         Instant.now(),
                         ZoneId.systemDefault()
                 );
                 return existingApp;
             }
 
-            if (!serviceAccountResource.exists()) {
+            if (!StringUtils.hasText(serviceAccountPath)) {
+                logger.warn("Firebase service account path is not configured. Bypassing Firebase initialization.");
+                return null;
+            }
+
+            InputStream serviceAccountStream = null;
+            String sourceDescription = null;
+
+            try {
+                java.nio.file.Path path = java.nio.file.Paths.get(serviceAccountPath);
+                if (path.isAbsolute() && java.nio.file.Files.exists(path)) {
+                    serviceAccountStream = java.nio.file.Files.newInputStream(path);
+                    sourceDescription = "absolute file path [" + path.toAbsolutePath() + "]";
+                }
+            } catch (Exception e) {
+                // Ignore InvalidPathException (e.g. for "classpath:...") and fall back to Spring ResourceLoader
+            }
+
+            if (serviceAccountStream == null) {
+                Resource serviceAccountResource = resourceLoader.getResource(serviceAccountPath);
+                if (serviceAccountResource.exists()) {
+                    try {
+                        serviceAccountStream = serviceAccountResource.getInputStream();
+                        sourceDescription = serviceAccountResource.getDescription();
+                    } catch (IOException e) {
+                        logger.warn("Could not read Spring resource {}: {}", serviceAccountResource.getDescription(), e.getMessage());
+                    }
+                }
+            }
+
+            if (serviceAccountStream == null) {
                 logger.warn(
-                        "Firebase service account file was not found at "
-                                + serviceAccountResource.getDescription()
-                                + ". Bypassing Firebase initialization."
+                        "Firebase service account file was not found at [{}]. Bypassing Firebase initialization.",
+                        serviceAccountPath
                 );
                 return null;
             }
 
-            try (InputStream serviceAccount = serviceAccountResource.getInputStream()) {
-                // Loading from a Spring Resource keeps the same path working from the IDE and packaged JARs.
+            try (InputStream finalStream = serviceAccountStream) {
                 FirebaseOptions options = FirebaseOptions.builder()
-                        .setCredentials(GoogleCredentials.fromStream(serviceAccount))
+                        .setCredentials(GoogleCredentials.fromStream(finalStream))
                         .build();
 
                 FirebaseApp firebaseApp = FirebaseApp.initializeApp(options);
                 logger.info(
                         "Initialized Firebase app '{}' using {}. serverTimeUtc={} zoneId={}",
                         firebaseApp.getName(),
-                        serviceAccountResource.getDescription(),
+                        sourceDescription,
                         Instant.now(),
                         ZoneId.systemDefault()
                 );
@@ -76,7 +108,7 @@ public class FirebaseConfig {
             } catch (IOException exception) {
                 throw new IllegalStateException(
                         "Failed to initialize Firebase from "
-                                + serviceAccountResource.getDescription()
+                                + sourceDescription
                                 + ". Ensure the service account JSON is present and valid.",
                         exception
                 );

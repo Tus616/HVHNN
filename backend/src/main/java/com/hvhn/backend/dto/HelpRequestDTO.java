@@ -8,6 +8,11 @@ public class HelpRequestDTO {
     private Double latitude;
     private Double longitude;
     private String address;
+    private String city;
+    private String district;
+    private String state;
+    private String postalCode;
+    private String locationSource;
     private String contactPhone;
     private String communityId;
     private String requiredBloodGroup;
@@ -30,6 +35,16 @@ public class HelpRequestDTO {
     public void setLongitude(Double longitude) { this.longitude = longitude; }
     public String getAddress() { return address; }
     public void setAddress(String address) { this.address = address; }
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
+    public String getState() { return state; }
+    public void setState(String state) { this.state = state; }
+    public String getPostalCode() { return postalCode; }
+    public void setPostalCode(String postalCode) { this.postalCode = postalCode; }
+    public String getLocationSource() { return locationSource; }
+    public void setLocationSource(String locationSource) { this.locationSource = locationSource; }
     public String getContactPhone() { return contactPhone; }
     public void setContactPhone(String contactPhone) { this.contactPhone = contactPhone; }
     public String getCommunityId() { return communityId; }

@@ -1,161 +1,237 @@
 package com.hvhn.backend.service;
 
 import com.hvhn.backend.dto.OtpStatusResponse;
+import com.hvhn.backend.model.EmailOtpChallenge;
+import com.hvhn.backend.repository.EmailOtpChallengeRepository;
 import com.hvhn.backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.List;
+import java.util.function.Supplier;
 
 @Service
 public class EmailOtpService {
 
     private static final Logger log = LoggerFactory.getLogger(EmailOtpService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int MAX_ATTEMPTS = 5;
 
     private final UserRepository userRepository;
-    private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final EmailOtpChallengeRepository challengeRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final MailjetEmailService mailjetEmailService;
     private final String fromAddress;
     private final Duration otpLifetime;
-    private final Duration verificationLifetime;
     private final Duration resendCooldown;
-    private final boolean debugReturnOtp;
+    private final Duration requestWindow;
+    private final int maxRequestsPerWindow;
+    private final Supplier<String> otpSupplier;
 
-    private final ConcurrentMap<String, PendingOtp> pendingOtps = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Instant> verifiedEmails = new ConcurrentHashMap<>();
-
+    @Autowired
     public EmailOtpService(
             UserRepository userRepository,
-            ObjectProvider<JavaMailSender> mailSenderProvider,
-            @Value("${app.mail.from:${spring.mail.username:}}") String fromAddress,
+            EmailOtpChallengeRepository challengeRepository,
+            PasswordEncoder passwordEncoder,
+            MailjetEmailService mailjetEmailService,
+            @Value("${app.mail.from:}") String fromAddress,
             @Value("${app.otp.expiry-seconds:300}") long otpExpirySeconds,
-            @Value("${app.otp.verification-window-seconds:900}") long verificationWindowSeconds,
             @Value("${app.otp.resend-cooldown-seconds:30}") long resendCooldownSeconds,
-            @Value("${app.otp.debug-return-otp:true}") boolean debugReturnOtp
+            @Value("${app.otp.rate-window-seconds:3600}") long requestWindowSeconds,
+            @Value("${app.otp.max-requests-per-window:5}") int maxRequestsPerWindow
     ) {
-        this.userRepository = userRepository;
-        this.mailSenderProvider = mailSenderProvider;
-        this.fromAddress = fromAddress;
-        this.otpLifetime = Duration.ofSeconds(otpExpirySeconds);
-        this.verificationLifetime = Duration.ofSeconds(verificationWindowSeconds);
-        this.resendCooldown = Duration.ofSeconds(resendCooldownSeconds);
-        this.debugReturnOtp = debugReturnOtp;
+        this(
+                userRepository,
+                challengeRepository,
+                passwordEncoder,
+                mailjetEmailService,
+                fromAddress,
+                otpExpirySeconds,
+                resendCooldownSeconds,
+                requestWindowSeconds,
+                maxRequestsPerWindow,
+                EmailOtpService::generateSecureOtp
+        );
     }
 
-    public OtpStatusResponse sendOtp(String email) {
-        String normalizedEmail = normalizeEmail(email);
+    EmailOtpService(
+            UserRepository userRepository,
+            EmailOtpChallengeRepository challengeRepository,
+            PasswordEncoder passwordEncoder,
+            MailjetEmailService mailjetEmailService,
+            String fromAddress,
+            long otpExpirySeconds,
+            long resendCooldownSeconds,
+            long requestWindowSeconds,
+            int maxRequestsPerWindow,
+            Supplier<String> otpSupplier
+    ) {
+        this.userRepository = userRepository;
+        this.challengeRepository = challengeRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.mailjetEmailService = mailjetEmailService;
+        this.fromAddress = fromAddress;
+        this.otpLifetime = Duration.ofSeconds(otpExpirySeconds);
+        this.resendCooldown = Duration.ofSeconds(resendCooldownSeconds);
+        this.requestWindow = Duration.ofSeconds(requestWindowSeconds);
+        this.maxRequestsPerWindow = Math.max(1, maxRequestsPerWindow);
+        this.otpSupplier = otpSupplier;
+    }
 
+    public OtpStatusResponse sendRegistrationOtp(String email, String requestIp, String userAgent) {
+        String normalizedEmail = normalizeEmail(email);
         if (!StringUtils.hasText(normalizedEmail)) {
-            throw new IllegalArgumentException("Email is required.");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email is required.");
         }
-        if (userRepository.existsByEmail(normalizedEmail)) {
-            throw new IllegalArgumentException("An account with this email already exists. Try signing in instead.");
+        if (userRepository.existsByNormalizedEmail(normalizedEmail) || userRepository.existsByEmail(normalizedEmail)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this email already exists.");
         }
 
         Instant now = Instant.now();
-        clearExpiredState(normalizedEmail, now);
-
-        PendingOtp existingOtp = pendingOtps.get(normalizedEmail);
-        if (existingOtp != null) {
-            Instant nextAllowedSendTime = existingOtp.sentAt().plus(resendCooldown);
-            if (now.isBefore(nextAllowedSendTime)) {
-                long waitSeconds = Math.max(1, Duration.between(now, nextAllowedSendTime).toSeconds());
-                throw new IllegalArgumentException(
-                        "Please wait " + waitSeconds + " seconds before requesting another OTP."
-                );
+        EmailOtpChallenge active = challengeRepository
+                .findFirstByNormalizedEmailAndPurposeAndConsumedFalseOrderByCreatedAtDesc(
+                        normalizedEmail,
+                        EmailOtpChallenge.PURPOSE_REGISTRATION
+                )
+                .orElse(null);
+        if (active != null && active.getLastSentAt() != null) {
+            Instant nextAllowed = active.getLastSentAt().plus(resendCooldown);
+            if (now.isBefore(nextAllowed)) {
+                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                        "Please wait before requesting another OTP.");
             }
         }
 
-        String otp = generateOtp();
-        boolean emailSent = trySendOtpEmail(normalizedEmail, otp);
+        long recentRequestCount = challengeRepository.countByNormalizedEmailAndPurposeAndCreatedAtAfter(
+                normalizedEmail,
+                EmailOtpChallenge.PURPOSE_REGISTRATION,
+                now.minus(requestWindow)
+        );
+        if (recentRequestCount >= maxRequestsPerWindow) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many OTP requests. Try again later.");
+        }
 
-        pendingOtps.put(normalizedEmail, new PendingOtp(otp, now.plus(otpLifetime), now));
-        verifiedEmails.remove(normalizedEmail);
+        invalidateActiveChallenges(normalizedEmail);
 
-        String message = emailSent
-                ? "OTP sent to " + normalizedEmail + ". Check your inbox and spam folder."
-                : "SMTP is not configured yet, so the OTP could not be emailed. The code is available below for local development.";
+        String otp = otpSupplier.get();
+        EmailOtpChallenge challenge = new EmailOtpChallenge();
+        challenge.setNormalizedEmail(normalizedEmail);
+        challenge.setPurpose(EmailOtpChallenge.PURPOSE_REGISTRATION);
+        challenge.setOtpHash(passwordEncoder.encode(otp));
+        challenge.setCreatedAt(now);
+        challenge.setExpiresAt(now.plus(otpLifetime));
+        challenge.setDeleteAfter(now.plus(otpLifetime).plus(Duration.ofHours(24)));
+        challenge.setLastSentAt(now);
+        challenge.setRequestIp(requestIp);
+        challenge.setUserAgent(userAgent);
+        challenge.setResendCount(active == null ? 0 : active.getResendCount() + 1);
+        challengeRepository.save(challenge);
 
-        return new OtpStatusResponse(message, debugReturnOtp ? otp : null, false);
+        trySendOtpEmail(normalizedEmail, otp);
+        return new OtpStatusResponse(
+                "If the email can receive Sahay registration codes, an OTP has been sent.",
+                false,
+                resendCooldown.toSeconds(),
+                otpLifetime.toSeconds()
+        );
+    }
+
+    public OtpStatusResponse sendOtp(String email) {
+        return sendRegistrationOtp(email, null, null);
     }
 
     public OtpStatusResponse verifyOtp(String email, String otp) {
+        consumeRegistrationOtp(email, otp);
+        return new OtpStatusResponse("Email verified successfully.", true);
+    }
+
+    public void consumeRegistrationOtp(String email, String otp) {
         String normalizedEmail = normalizeEmail(email);
         String normalizedOtp = otp == null ? "" : otp.trim();
         Instant now = Instant.now();
 
-        clearExpiredState(normalizedEmail, now);
+        EmailOtpChallenge challenge = challengeRepository
+                .findFirstByNormalizedEmailAndPurposeAndConsumedFalseOrderByCreatedAtDesc(
+                        normalizedEmail,
+                        EmailOtpChallenge.PURPOSE_REGISTRATION
+                )
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "OTP verification could not be completed. Request a new OTP."));
 
-        PendingOtp pendingOtp = pendingOtps.get(normalizedEmail);
-        if (pendingOtp == null) {
-            throw new IllegalArgumentException("No OTP request was found for this email. Request a new OTP.");
+        if (challenge.getVerifiedAt() != null || challenge.isConsumed()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "This OTP has already been used.");
         }
-        if (!pendingOtp.code().equals(normalizedOtp)) {
-            throw new IllegalArgumentException("Invalid OTP. Please try again.");
+        if (challenge.getExpiresAt() == null || now.isAfter(challenge.getExpiresAt())) {
+            challenge.setConsumed(true);
+            challengeRepository.save(challenge);
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "OTP has expired. Request a new OTP.");
+        }
+        if (challenge.getFailedAttempts() >= MAX_ATTEMPTS) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many incorrect OTP attempts. Request a new OTP.");
+        }
+        if (!passwordEncoder.matches(normalizedOtp, challenge.getOtpHash())) {
+            challenge.setFailedAttempts(challenge.getFailedAttempts() + 1);
+            challengeRepository.save(challenge);
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Invalid OTP.");
         }
 
-        pendingOtps.remove(normalizedEmail);
-        verifiedEmails.put(normalizedEmail, now.plus(verificationLifetime));
-
-        return new OtpStatusResponse(
-                "Email verified successfully. You can finish creating your account now.",
-                null,
-                true
-        );
+        challenge.setVerifiedAt(now);
+        challenge.setConsumed(true);
+        challengeRepository.save(challenge);
     }
 
     public boolean consumeVerifiedEmail(String email) {
-        String normalizedEmail = normalizeEmail(email);
-        Instant expiresAt = verifiedEmails.remove(normalizedEmail);
-        return expiresAt != null && Instant.now().isBefore(expiresAt);
+        return false;
     }
 
-    private boolean trySendOtpEmail(String recipientEmail, String otp) {
-        if (!StringUtils.hasText(fromAddress)) {
-            log.warn("OTP email delivery is not configured because no from-address is set.");
-            return false;
-        }
-
-        JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
-        if (mailSender == null) {
-            log.warn("OTP email delivery is not configured because JavaMailSender is unavailable.");
-            return false;
-        }
-
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(fromAddress);
-        message.setTo(recipientEmail);
-        message.setSubject("HVHN verification code");
-        message.setText(buildOtpEmailBody(otp));
-
-        try {
-            mailSender.send(message);
-            return true;
-        } catch (MailException exception) {
-            log.error("Failed to send OTP email to {}", recipientEmail, exception);
-            if (!debugReturnOtp) {
-                throw new IllegalStateException(
-                        "Could not send the OTP email. Check the backend SMTP settings and try again."
-                );
+    private void invalidateActiveChallenges(String normalizedEmail) {
+        List<EmailOtpChallenge> activeChallenges = challengeRepository.findByNormalizedEmailAndPurposeAndConsumedFalse(
+                normalizedEmail,
+                EmailOtpChallenge.PURPOSE_REGISTRATION
+        );
+        Instant now = Instant.now();
+        for (EmailOtpChallenge challenge : activeChallenges) {
+            challenge.setConsumed(true);
+            if (challenge.getDeleteAfter() == null) {
+                challenge.setDeleteAfter(now.plus(Duration.ofHours(24)));
             }
-            return false;
+        }
+        challengeRepository.saveAll(activeChallenges);
+    }
+
+    private void trySendOtpEmail(String recipientEmail, String otp) {
+        if (!mailjetEmailService.isConfigured()) {
+            log.warn("[email] OTP email delivery skipped — Mailjet is not configured (MAILJET_API_KEY/SECRET/MAIL_FROM absent).");
+            return;
+        }
+        try {
+            mailjetEmailService.sendEmail(
+                    recipientEmail,
+                    "Sahay verification code",
+                    buildOtpEmailBody(otp)
+            );
+        } catch (MailjetEmailService.EmailDeliveryException exception) {
+            log.error("[email] Failed to send OTP email. provider=Mailjet error=DELIVERY_FAILURE to=[redacted]");
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not send the OTP email. Try again later.");
         }
     }
 
     private String buildOtpEmailBody(String otp) {
         return """
-                Your HVHN verification code is %s.
+                Your Sahay verification code is: %s.
 
                 It expires in %d minutes.
 
@@ -163,26 +239,11 @@ public class EmailOtpService {
                 """.formatted(otp, Math.max(1, otpLifetime.toMinutes()));
     }
 
-    private void clearExpiredState(String email, Instant now) {
-        PendingOtp pendingOtp = pendingOtps.get(email);
-        if (pendingOtp != null && now.isAfter(pendingOtp.expiresAt())) {
-            pendingOtps.remove(email);
-        }
-
-        Instant verifiedUntil = verifiedEmails.get(email);
-        if (verifiedUntil != null && now.isAfter(verifiedUntil)) {
-            verifiedEmails.remove(email);
-        }
-    }
-
     private String normalizeEmail(String email) {
         return email == null ? null : email.trim().toLowerCase();
     }
 
-    private String generateOtp() {
+    private static String generateSecureOtp() {
         return String.format("%06d", RANDOM.nextInt(1_000_000));
-    }
-
-    private record PendingOtp(String code, Instant expiresAt, Instant sentAt) {
     }
 }

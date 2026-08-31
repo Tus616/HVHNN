@@ -9,6 +9,7 @@ import {
 } from '../services/firebase';
 import {
   clearSessionStorage,
+  getStoredUser,
   getStoredToken,
   persistSessionStorage,
 } from '../utils/sessionStorage';
@@ -34,6 +35,27 @@ function clearStoredSession() {
   clearSessionStorage();
 }
 
+function normalizeUserData(userData = {}, token = '') {
+  const userId = userData.userId || userData.id || '';
+  return {
+    ...userData,
+    id: userData.id || userId,
+    userId,
+    token: token || userData.token || getStoredToken(),
+    onboardingCompleted: Boolean(userData.onboardingCompleted),
+    isVolunteer: Boolean(userData.isVolunteer ?? userData.volunteerEnabled),
+    volunteerEnabled: Boolean(userData.volunteerEnabled ?? userData.isVolunteer),
+  };
+}
+
+function needsOnboardingForUser(userData) {
+  return Boolean(userData) && !Boolean(userData.onboardingCompleted);
+}
+
+function routeAfterAuth(userData, fallback = '/feed') {
+  return needsOnboardingForUser(userData) ? '/onboarding' : fallback;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -41,18 +63,21 @@ export function AuthProvider({ children }) {
 
   const setSession = useCallback((userData, token) => {
     const expiry = Date.now() + 24 * 60 * 60 * 1000;
-    persistSessionStorage(userData, token, expiry);
-    setUser(userData);
+    const normalizedUser = normalizeUserData(userData, token);
+    persistSessionStorage(normalizedUser, normalizedUser.token, expiry);
+    setUser(normalizedUser);
     setSessionExpiry(expiry);
+    return normalizedUser;
   }, []);
 
   const updateUser = useCallback((nextUserData) => {
     setUser((currentUser) => {
-      const resolvedUser = typeof nextUserData === 'function'
+      const rawUser = typeof nextUserData === 'function'
         ? nextUserData(currentUser)
         : { ...(currentUser || {}), ...(nextUserData || {}) };
 
-      const token = resolvedUser?.token || currentUser?.token || getStoredToken();
+      const token = rawUser?.token || currentUser?.token || getStoredToken();
+      const resolvedUser = normalizeUserData(rawUser, token);
       const expiry = sessionExpiry || Date.now() + 24 * 60 * 60 * 1000;
       persistSessionStorage(resolvedUser, token, expiry);
       return resolvedUser;
@@ -75,24 +100,57 @@ export function AuthProvider({ children }) {
   }, [clearSession]);
 
   useEffect(() => {
-    const saved = localStorage.getItem('hvhn_user');
-    const expiry = localStorage.getItem('hvhn_session_expiry');
+    let active = true;
+    const restoreSession = async () => {
+      const token = getStoredToken();
+      const expiry = window.localStorage.getItem('hvhn_session_expiry');
+      const expiryMs = expiry ? parseInt(expiry, 10) : null;
+      const cachedUser = getStoredUser();
 
-    if (saved && expiry) {
-      if (Date.now() < parseInt(expiry, 10)) {
-        try {
-          setUser(JSON.parse(saved));
-        } catch {
-          clearStoredSession();
-        }
-        setSessionExpiry(parseInt(expiry, 10));
-      } else {
+      if (!token || (expiryMs && Date.now() >= expiryMs)) {
         clearStoredSession();
+        if (active) setLoading(false);
+        return;
       }
-    }
 
-    setLoading(false);
-  }, []);
+      try {
+        if (cachedUser && active) {
+          setUser(normalizeUserData(cachedUser, token));
+          setSessionExpiry(expiryMs);
+        }
+        const response = await apiService.getProfile();
+        if (!active) return;
+        setSession(response.data, token);
+      } catch (error) {
+        if (error?.response?.status === 401) {
+          clearStoredSession();
+          if (active) {
+            setUser(null);
+            setSessionExpiry(null);
+          }
+        } else if (cachedUser && active) {
+          setUser(normalizeUserData(cachedUser, token));
+          setSessionExpiry(expiryMs);
+        } else if (active) {
+          setUser(null);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    restoreSession();
+
+    const handleExpired = () => {
+      clearSession();
+    };
+    window.addEventListener('hvhn:auth-expired', handleExpired);
+
+    return () => {
+      active = false;
+      window.removeEventListener('hvhn:auth-expired', handleExpired);
+    };
+  }, [clearSession, setSession]);
 
   useEffect(() => {
     if (!sessionExpiry) return;
@@ -105,7 +163,6 @@ export function AuthProvider({ children }) {
 
     const timer = setTimeout(() => {
       logout();
-      alert('Your session has expired. Please login again.');
     }, remaining);
 
     return () => clearTimeout(timer);
@@ -115,22 +172,20 @@ export function AuthProvider({ children }) {
     if (!email || !password) throw new Error('Email and password are required.');
     const res = await apiService.login({ email, password });
     const userData = res.data;
-    setSession(userData, userData.token);
-    return userData;
+    return setSession(userData, userData.token);
   };
 
   const register = async (data) => {
-    if (!data.fullName || !data.email || !data.password) {
-      throw new Error('Name, email, and password are required.');
+    if (!data.fullName || !data.email || !data.password || !data.otp) {
+      throw new Error('Name, email, password, and OTP are required.');
     }
-    if (data.password.length < 6) {
-      throw new Error('Password must be at least 6 characters.');
+    if (data.password.length < 8) {
+      throw new Error('Password must be at least 8 characters.');
     }
 
-    const res = await apiService.register(data);
+    const res = await apiService.verifyRegistration(data);
     const userData = res.data;
-    setSession(userData, userData.token);
-    return userData;
+    return setSession(userData, userData.token);
   };
 
   const sendLoginLink = async (email) => {
@@ -155,8 +210,7 @@ export function AuthProvider({ children }) {
       profileImage: firebaseUser.photoURL ?? response.data.profileImage,
     };
 
-    setSession(userData, response.data.token);
-    return userData;
+    return setSession(userData, response.data.token);
   }, [setSession]);
 
   const completeLoginLink = useCallback(async (linkUrl) => {
@@ -174,13 +228,14 @@ export function AuthProvider({ children }) {
   }, []);
 
   const isAuthenticated = !!user;
+  const needsOnboarding = needsOnboardingForUser(user);
 
   const refreshProfile = useCallback(async () => {
-    if (!user?.userId) return null;
-    const response = await apiService.getProfile(user.userId);
+    if (!user) return null;
+    const response = await apiService.getProfile();
     updateUser((currentUser) => ({ ...(currentUser || {}), ...(response.data || {}) }));
     return response.data;
-  }, [updateUser, user?.userId]);
+  }, [updateUser, user]);
 
   const hasRole = useCallback((requiredRole) => {
     if (!user) return false;
@@ -222,6 +277,8 @@ export function AuthProvider({ children }) {
       loginWithGoogle,
       isEmailLinkLogin,
       isAuthenticated,
+      needsOnboarding,
+      routeAfterAuth,
       hasRole,
       isAdmin,
       isModerator,

@@ -45,7 +45,8 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
                         HttpStatus.FORBIDDEN.value(),
                         HttpStatus.FORBIDDEN.getReasonPhrase(),
                         "You do not have permission to access this resource",
-                        request.getRequestURI()
+                        request.getRequestURI(),
+                        String.valueOf(request.getAttribute("requestId"))
                 )
         );
     }

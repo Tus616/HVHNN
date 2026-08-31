@@ -1,4 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
+import { getMessaging, getToken, isSupported as isMessagingSupported, onMessage } from 'firebase/messaging';
 import {
   GoogleAuthProvider,
   getAuth,
@@ -32,6 +33,7 @@ const firebaseConfig = {
 };
 
 const REQUIRED_FIREBASE_CONFIG = ['apiKey', 'authDomain', 'projectId', 'appId'];
+const REQUIRED_FIREBASE_MESSAGING_CONFIG = [...REQUIRED_FIREBASE_CONFIG, 'messagingSenderId'];
 
 function getMissingFirebaseConfig() {
   return REQUIRED_FIREBASE_CONFIG.filter((key) => !firebaseConfig[key]);
@@ -48,6 +50,10 @@ function parseBoolean(value, fallback = false) {
 
 export function isFirebaseConfigured() {
   return getMissingFirebaseConfig().length === 0;
+}
+
+export function isFirebaseMessagingConfigured() {
+  return REQUIRED_FIREBASE_MESSAGING_CONFIG.every((key) => Boolean(firebaseConfig[key]));
 }
 
 export function getFirebaseConfigurationMessage() {
@@ -67,6 +73,13 @@ function getFirebaseApp() {
 
 function getFirebaseAuth() {
   return getAuth(getFirebaseApp());
+}
+
+async function getFirebaseMessaging() {
+  if (!isFirebaseMessagingConfigured() || !(await isMessagingSupported())) {
+    return null;
+  }
+  return getMessaging(getFirebaseApp());
 }
 
 function getGoogleProvider() {
@@ -207,4 +220,17 @@ export async function completeEmailLinkSignIn(linkUrl, emailOverride) {
 export async function signOutFirebaseUser() {
   if (!isFirebaseConfigured()) return;
   await signOut(getFirebaseAuth());
+}
+
+export async function requestFirebaseMessagingToken(serviceWorkerRegistration) {
+  const messaging = await getFirebaseMessaging();
+  const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+  if (!messaging || !vapidKey) return '';
+  return getToken(messaging, { vapidKey, serviceWorkerRegistration });
+}
+
+export async function subscribeForegroundMessages(handler) {
+  const messaging = await getFirebaseMessaging();
+  if (!messaging) return () => {};
+  return onMessage(messaging, handler);
 }

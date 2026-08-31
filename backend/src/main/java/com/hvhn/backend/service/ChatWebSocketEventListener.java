@@ -37,9 +37,10 @@ public class ChatWebSocketEventListener {
             return;
         }
 
-        boolean firstSession = chatSessionRegistry.registerSession(sessionId, principal.getName());
+        String userId = principal.getName();
+        boolean firstSession = chatSessionRegistry.registerSession(sessionId, userId);
+        PresenceView presence = chatService.updatePresenceSessionCount(userId, chatSessionRegistry.getActiveSessionCount(userId));
         if (firstSession) {
-            PresenceView presence = chatService.markUserOnline(principal.getName());
             messagingTemplate.convertAndSend("/topic/presence", presence);
         }
     }
@@ -54,8 +55,10 @@ public class ChatWebSocketEventListener {
         }
 
         chatSessionRegistry.unregisterSession(sessionId).ifPresent(userId -> {
-            PresenceView presence = chatService.markUserOffline(userId);
-            messagingTemplate.convertAndSend("/topic/presence", presence);
+            PresenceView presence = chatService.updatePresenceSessionCount(userId, chatSessionRegistry.getActiveSessionCount(userId));
+            if (presence.getStatus() == com.hvhn.backend.model.enums.PresenceStatus.OFFLINE) {
+                messagingTemplate.convertAndSend("/topic/presence", presence);
+            }
         });
     }
 }

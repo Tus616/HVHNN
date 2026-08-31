@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { USE_MOCK_API } from './apiConfig';
 import {
   MOCK_ADMIN_ANALYTICS,
   MOCK_ADMIN_COMMUNITIES,
@@ -43,7 +44,9 @@ function notifyUnauthorized() {
 }
 
 function logAdminError(context, error) {
-  console.error(`[admin] ${context}`, error);
+  if (import.meta.env.DEV) {
+    console.warn(`[admin] ${context}`, error);
+  }
 }
 
 function clone(value) {
@@ -67,7 +70,7 @@ function titleCase(value) {
 function normalizeCategory(category) {
   const normalized = String(category || 'GENERAL').trim().toUpperCase();
 
-  if (normalized.includes('BLOOD')) return 'BLOOD';
+  if (normalized.includes('BLOOD')) return 'BLOOD_DONATION';
   if (normalized.includes('MEDICAL')) return 'MEDICAL';
   if (normalized.includes('FOOD')) return 'FOOD';
 
@@ -122,7 +125,7 @@ function normalizeRequestItem(item, index = 0) {
     createdAt,
     description: item.description || item.aiSummary || item.notes || 'No additional details available.',
     communityId,
-    communityName: communityName || 'HVHN Network',
+    communityName: communityName || 'Sahay Network',
     flagged: Boolean(item.flagged),
   };
 }
@@ -133,7 +136,7 @@ function normalizeUserItem(item, index = 0) {
   const blocked = Boolean(item.blocked);
   const role = normalizeUserRole(item.role);
   const communityId = String(item.communityId || item.community?.id || item.communityId || '');
-  const communityName = item.community || item.communityName || item.community?.name || 'HVHN Network';
+  const communityName = item.community || item.communityName || item.community?.name || 'Sahay Network';
 
   return {
     id: String(id),
@@ -217,7 +220,7 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
     const response = await requestFactory();
     const nextData = transform ? transform(response.data) : response.data;
 
-    if (allowEmptyFallback && isEmptyCollection(nextData)) {
+    if (USE_MOCK_API && allowEmptyFallback && isEmptyCollection(nextData)) {
       return {
         data: clone(fallbackValue),
         fallback: true,
@@ -238,6 +241,10 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
 
     logAdminError(context, error);
 
+    if (!USE_MOCK_API) {
+      throw error;
+    }
+
     return {
       data: clone(fallbackValue),
       fallback: true,
@@ -247,26 +254,28 @@ async function runAuthorizedRequest(requestFactory, context, fallbackValue, opti
 }
 
 function applyCommunityScope(records, user, selector) {
-  if (!isCommunityAdmin(user)) return records;
+  const safeRecords = Array.isArray(records) ? records : [];
+  if (!isCommunityAdmin(user)) return safeRecords;
 
   const scopedCommunityId = getScopedCommunityId(
     user,
-    records[0]?.communityId || records[0]?.id || ''
+    safeRecords[0]?.communityId || safeRecords[0]?.id || ''
   );
 
-  return records.filter((record) => selector(record) === scopedCommunityId);
+  return safeRecords.filter((record) => selector(record) === scopedCommunityId);
 }
 
 function paginate(items, page = 0, size = PAGE_SIZE_DEFAULT) {
+  const safeItems = Array.isArray(items) ? items : [];
   const safePageSize = Math.max(1, size);
   const safePage = Math.max(0, page);
-  const totalItems = items.length;
+  const totalItems = safeItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
   const startIndex = safePage * safePageSize;
   const endIndex = startIndex + safePageSize;
 
   return {
-    items: items.slice(startIndex, endIndex),
+    items: safeItems.slice(startIndex, endIndex),
     page: safePage,
     size: safePageSize,
     totalItems,
@@ -349,21 +358,24 @@ async function fetchCommunityCollection(user) {
 }
 
 function deriveOverviewStats(requests, users) {
-  const pendingRequests = requests.filter((request) => request.status === 'PENDING').length;
-  const resolvedRequests = requests.filter((request) => request.status === 'RESOLVED').length;
-  const activeVolunteers = users.filter((user) => user.role === 'VOLUNTEER' && !user.blocked).length;
-  const totalRequestsToday = requests.filter((request) => {
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const userArr = Array.isArray(users) ? users : [];
+
+  const pendingRequests = reqArr.filter((request) => request.status === 'PENDING').length;
+  const resolvedRequests = reqArr.filter((request) => request.status === 'RESOLVED').length;
+  const activeVolunteers = userArr.filter((user) => user.role === 'VOLUNTEER' && !user.blocked).length;
+  const totalRequestsToday = reqArr.filter((request) => {
     const requestDate = new Date(request.createdAt);
     const today = new Date();
     return requestDate.toDateString() === today.toDateString();
   }).length;
 
   return {
-    totalRequestsToday: totalRequestsToday || MOCK_ADMIN_STATS.totalRequestsToday,
-    activeVolunteers: activeVolunteers || MOCK_ADMIN_STATS.activeVolunteers,
+    totalRequestsToday,
+    activeVolunteers,
     pendingRequests,
     resolvedRequests,
-    totalMembers: users.length,
+    totalMembers: userArr.length,
   };
 }
 
@@ -394,7 +406,7 @@ function normalizeOverviewPayload(data) {
 }
 
 function filterRequests(requests, filters) {
-  return requests.filter((request) => {
+  return (Array.isArray(requests) ? requests : []).filter((request) => {
     const matchesCategory = !filters.category || request.category === filters.category;
     const matchesUrgency = !filters.urgency || request.urgency === filters.urgency;
     const matchesStatus = !filters.status || request.status === filters.status;
@@ -413,7 +425,7 @@ function filterRequests(requests, filters) {
 }
 
 function filterUsers(users, filters) {
-  return users.filter((user) => {
+  return (Array.isArray(users) ? users : []).filter((user) => {
     const matchesRole = !filters.role || user.role === filters.role;
     const matchesStatus = !filters.status || user.status === filters.status;
     return matchesRole && matchesStatus;
@@ -421,42 +433,45 @@ function filterUsers(users, filters) {
 }
 
 function deriveAnalytics(requests, users) {
+  const reqArr = Array.isArray(requests) ? requests : [];
+  const userArr = Array.isArray(users) ? users : [];
   const lastSevenDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const requestBuckets = lastSevenDays.map((dayLabel, index) => ({
     day: dayLabel,
-    requests: 5 + ((requests.length + index * 3) % 16),
+    requests: reqArr.filter((request) => {
+      const createdAt = new Date(request.createdAt);
+      return Number.isFinite(createdAt.getTime()) && createdAt.getDay() === index;
+    }).length,
   }));
 
-  const categoryCounts = requests.reduce((accumulator, request) => {
+  const categoryCounts = reqArr.reduce((accumulator, request) => {
     accumulator[request.category] = (accumulator[request.category] || 0) + 1;
     return accumulator;
   }, {});
 
   const categoryBreakdown = [
-    { name: 'Blood', value: categoryCounts.BLOOD || 0, color: '#ef4444' },
+    { name: 'Blood donation', value: categoryCounts.BLOOD_DONATION || categoryCounts.BLOOD || 0, color: '#ef4444' },
     { name: 'Medical', value: categoryCounts.MEDICAL || 0, color: '#3b82f6' },
     { name: 'Food', value: categoryCounts.FOOD || 0, color: '#22c55e' },
     { name: 'General', value: categoryCounts.GENERAL || 0, color: '#9ca3af' },
   ];
 
-  const topVolunteers = users
+  const topVolunteers = userArr
     .filter((user) => user.role === 'VOLUNTEER')
-    .sort((left, right) => right.requestsHelped - left.requestsHelped)
+    .sort((left, right) => (right.requestsHelped || 0) - (left.requestsHelped || 0))
     .slice(0, 5)
     .map((user) => ({
       id: user.id,
-      name: user.fullName,
-      helpedCount: user.requestsHelped,
-      badge: user.badge,
+      name: user.fullName || 'Volunteer',
+      helpedCount: user.requestsHelped || 0,
+      badge: user.badge || 'Volunteer',
     }));
 
   return {
     requestsPerDay: requestBuckets,
-    categoryBreakdown: categoryBreakdown.some((item) => item.value > 0)
-      ? categoryBreakdown
-      : clone(MOCK_ADMIN_ANALYTICS.categoryBreakdown),
-    averageResponseTime: `${8 + (requests.length % 7)}m ${10 + (users.length % 45)}s`,
-    topVolunteers: topVolunteers.length > 0 ? topVolunteers : clone(MOCK_ADMIN_ANALYTICS.topVolunteers),
+    categoryBreakdown,
+    averageResponseTime: reqArr.length > 0 ? 'Measured by backend when available' : 'No completed requests yet',
+    topVolunteers,
   };
 }
 

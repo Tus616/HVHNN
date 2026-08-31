@@ -41,6 +41,9 @@ export default function useChatSocket(roomId, token) {
   const typingSubscriptionRef = useRef(null);
   const presenceSubscriptionRef = useRef(null);
   const roomUpdatesSubscriptionRef = useRef(null);
+  const userMessagesSubscriptionRef = useRef(null);
+  const userConversationsSubscriptionRef = useRef(null);
+  const receiptsSubscriptionRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const successBannerTimerRef = useRef(null);
   const reconnectAttemptRef = useRef(0);
@@ -84,6 +87,25 @@ export default function useChatSocket(roomId, token) {
   const clearAllTypingExpiry = useCallback(() => {
     Object.keys(typingExpiryRef.current).forEach((userId) => clearTypingExpiry(userId));
   }, [clearTypingExpiry]);
+
+  const mergeMessage = useCallback((message) => {
+    if (!message || (!message.id && !message.clientMessageId)) return;
+    setMessages((current) => {
+      const exists = current.some((entry) => (
+        (message.id && entry.id === message.id)
+        || (message.clientMessageId && entry.clientMessageId === message.clientMessageId)
+      ));
+      if (exists) {
+        return current.map((entry) => (
+          (message.id && entry.id === message.id)
+          || (message.clientMessageId && entry.clientMessageId === message.clientMessageId)
+            ? { ...entry, ...message }
+            : entry
+        ));
+      }
+      return [...current, message];
+    });
+  }, []);
 
   const unsubscribeRoomSubscriptions = useCallback(() => {
     roomSubscriptionRef.current?.unsubscribe();
@@ -130,12 +152,7 @@ export default function useChatSocket(roomId, token) {
         const message = safeParse(frame.body);
         if (!message || !message.id) return;
 
-        setMessages((current) => {
-          if (current.some((entry) => entry.id === message.id)) {
-            return current;
-          }
-          return [...current, message];
-        });
+        mergeMessage(message);
       }
     );
 
@@ -160,7 +177,7 @@ export default function useChatSocket(roomId, token) {
         }
       }
     );
-  }, [clearAllTypingExpiry, clearTypingExpiry, unsubscribeRoomSubscriptions]);
+  }, [clearAllTypingExpiry, clearTypingExpiry, mergeMessage, unsubscribeRoomSubscriptions]);
 
   const handleDisconnect = useCallback(() => {
     if (!mountedRef.current || manualShutdownRef.current) return;
@@ -198,6 +215,9 @@ export default function useChatSocket(roomId, token) {
       setIsConnected(true);
       presenceSubscriptionRef.current?.unsubscribe();
       roomUpdatesSubscriptionRef.current?.unsubscribe();
+      userMessagesSubscriptionRef.current?.unsubscribe();
+      userConversationsSubscriptionRef.current?.unsubscribe();
+      receiptsSubscriptionRef.current?.unsubscribe();
 
       presenceSubscriptionRef.current = client.subscribe('/topic/presence', (frame) => {
         const presence = safeParse(frame.body);
@@ -213,17 +233,32 @@ export default function useChatSocket(roomId, token) {
           setRoomUpdates((current) => ({ ...current, [room.id]: room }));
         });
         
-        client.subscribe(`/user/queue/chat/messages`, (msg) => {
-          try {
-            const body = JSON.parse(msg.body);
-            setMessages((prev) => [...prev, body]);
-            
-            if (document.hidden || currentRoomRef.current !== body.roomId) {
-              notifyChatMessage(body.roomId, body.senderName, body.content);
-            }
-          } catch {
-            // ignore parsing error
+        userMessagesSubscriptionRef.current = client.subscribe(`/user/queue/chat/messages`, (msg) => {
+          const body = safeParse(msg.body);
+          if (!body?.roomId) return;
+          mergeMessage(body);
+          if (document.hidden || currentRoomRef.current !== body.roomId) {
+            notifyChatMessage(body.roomId, body.senderName, body.content);
           }
+        });
+
+        userConversationsSubscriptionRef.current = client.subscribe(`/user/queue/chat/conversations`, (frame) => {
+          const room = safeParse(frame.body);
+          if (!room?.id) return;
+          setRoomUpdates((current) => ({ ...current, [room.id]: room }));
+        });
+
+        receiptsSubscriptionRef.current = client.subscribe(`/user/queue/chat/receipts`, (frame) => {
+          const receipt = safeParse(frame.body);
+          if (!receipt?.roomId) return;
+          setRoomUpdates((current) => ({
+            ...current,
+            [receipt.roomId]: {
+              ...(current[receipt.roomId] || {}),
+              id: receipt.roomId,
+              unreadCount: receipt.unreadCount ?? 0,
+            },
+          }));
         });
       }
 
@@ -248,7 +283,7 @@ export default function useChatSocket(roomId, token) {
     client.onStompError = handleDisconnect;
     clientRef.current = client;
     client.activate();
-  }, [clearReconnectTimer, clearSuccessBannerTimer, fetchOnlineUsers, handleDisconnect, publishPresence, subscribeToActiveRoom, token, notifyChatMessage]);
+  }, [clearReconnectTimer, clearSuccessBannerTimer, fetchOnlineUsers, handleDisconnect, mergeMessage, publishPresence, subscribeToActiveRoom, token, notifyChatMessage]);
 
 
   useEffect(() => {
@@ -269,8 +304,14 @@ export default function useChatSocket(roomId, token) {
       unsubscribeRoomSubscriptions();
       presenceSubscriptionRef.current?.unsubscribe();
       roomUpdatesSubscriptionRef.current?.unsubscribe();
+      userMessagesSubscriptionRef.current?.unsubscribe();
+      userConversationsSubscriptionRef.current?.unsubscribe();
+      receiptsSubscriptionRef.current?.unsubscribe();
       presenceSubscriptionRef.current = null;
       roomUpdatesSubscriptionRef.current = null;
+      userMessagesSubscriptionRef.current = null;
+      userConversationsSubscriptionRef.current = null;
+      receiptsSubscriptionRef.current = null;
       setIsConnected(false);
       clientRef.current?.deactivate();
     };
@@ -294,15 +335,31 @@ export default function useChatSocket(roomId, token) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [publishPresence]);
 
-  const sendMessage = useCallback((content, messageType = 'CHAT', replyToMessageId = null) => {
+  const sendMessage = useCallback((content, messageType = 'CHAT', replyToMessageId = null, providedClientMessageId = '') => {
     if (!clientRef.current?.connected || !currentRoomRef.current) return false;
+    const normalizedMessageType = messageType && String(messageType).toUpperCase() === messageType ? messageType : 'CHAT';
+    const normalizedReplyToMessageId = normalizedMessageType === 'CHAT' && messageType !== 'CHAT' ? messageType : replyToMessageId;
+    const clientMessageId = providedClientMessageId || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     clientRef.current.publish({
       destination: '/app/chat.send',
       body: JSON.stringify({
         roomId: currentRoomRef.current,
         content,
-        messageType,
-        replyToMessageId,
+        messageType: normalizedMessageType,
+        clientMessageId,
+        replyToMessageId: normalizedReplyToMessageId,
+      }),
+    });
+    return clientMessageId;
+  }, []);
+
+  const markSeen = useCallback((lastSeenMessageId = null) => {
+    if (!clientRef.current?.connected || !currentRoomRef.current) return false;
+    clientRef.current.publish({
+      destination: '/app/chat.seen',
+      body: JSON.stringify({
+        roomId: currentRoomRef.current,
+        lastSeenMessageId,
       }),
     });
     return true;
@@ -323,6 +380,7 @@ export default function useChatSocket(roomId, token) {
     messages,
     sendMessage,
     sendTyping,
+    markSeen,
     typingUsers,
     onlineUsers,
     roomUpdates,

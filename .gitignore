@@ -3,15 +3,62 @@
 
 # Dependencies
 node_modules/
+.m2/
+**/.m2/
+.pythonlibs/
+**/.pythonlibs/
 
 # Build output
 dist/
 build/
+target/
+**/target/
+.firebase/
+**/.firebase/
+coverage/
+**/coverage/
+htmlcov/
+.coverage
+coverage.xml
 
 # Environment files
 .env
 .env.*
 !.env.example
+
+# Sensitive files (keys, certs, tokens, service accounts)
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.kdb
+*.srl
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+.npmrc
+.netrc
+*service-account*.json
+*serviceAccount*.json
+*firebase*key*.json
+*gcp*key*.json
+*google-credentials*.json
+credentials*.json
+secrets*.json
+secret*.json
+
+# Local backend config overrides (often contain secrets)
+application-*.properties
+application-*.yml
+application-*.yaml
+!application-example.properties
+!application-example.yml
+!application-example.yaml
 
 # IDE
 .idea/
@@ -21,9 +68,47 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+hs_err_pid*
+logs/
+**/logs/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated browser/test artifacts
+screenshots/
+**/screenshots/
+test-results/
+**/test-results/
+evidence/
+**/evidence/
+
+# Local runtime data and scratch files
+data/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+*~
+test.png
+update.js
 
 # Docker compose (root level only)
 docker-compose.yml

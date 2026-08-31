@@ -59,7 +59,7 @@ export default function PublicRequest() {
               alignItems: 'center', 
               justifyContent: 'center' 
             }}>⚡</span>
-            HVHN
+            Sahay
           </Link>
           <Link to="/register" className="btn btn-secondary btn-sm">Join Network</Link>
         </div>
@@ -124,7 +124,7 @@ export default function PublicRequest() {
                 Login or create an account to accept this request and securely connect with the requester.
               </p>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                <Link to="/register" className="btn btn-primary" style={{ padding: '12px 32px' }}>Join HVHN to Help</Link>
+                <Link to="/register" className="btn btn-primary" style={{ padding: '12px 32px' }}>Join Sahay to Help</Link>
                 <Link to="/login" className="btn btn-secondary" style={{ padding: '12px 32px' }}>Sign In</Link>
               </div>
             </div>
@@ -133,7 +133,7 @@ export default function PublicRequest() {
 
         <div style={{ marginTop: '40px', textAlign: 'center' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            HVHN — Hyperlocal Verified Help Network<br/>
+            Sahay - Help Where It Matters<br/>
             Bridging communities through verified assistance.
           </p>
         </div>

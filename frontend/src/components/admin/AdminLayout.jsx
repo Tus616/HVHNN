@@ -33,7 +33,7 @@ export default function AdminLayout({ adminRole }) {
       <section className="admin-content">
         <header className="admin-topbar">
           <div>
-            <p className="admin-topbar-eyebrow">Hyperlocal Verified Help Network</p>
+            <p className="admin-topbar-eyebrow">Help Where It Matters</p>
             <h1>Operations Console</h1>
           </div>
 

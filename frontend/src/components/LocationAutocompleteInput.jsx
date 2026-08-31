@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { searchLocationSuggestions } from '../services/locationSearch';
 
-const SEARCH_DEBOUNCE_MS = 500;
+const SEARCH_DEBOUNCE_MS = 300;
 const MIN_QUERY_LENGTH = 2;
 
 export default function LocationAutocompleteInput({
@@ -11,6 +11,7 @@ export default function LocationAutocompleteInput({
   className = 'form-input',
   required = false,
   disabled = false,
+  type = '',
   onValueChange,
   onSuggestionSelect,
 }) {
@@ -22,6 +23,7 @@ export default function LocationAutocompleteInput({
   const [isOpen, setIsOpen] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   const trimmedValue = String(value || '').trim();
 
@@ -48,6 +50,7 @@ export default function LocationAutocompleteInput({
       setIsOpen(false);
       setHasSearched(false);
       setErrorMessage('');
+      setActiveIndex(-1);
       return;
     }
 
@@ -71,8 +74,9 @@ export default function LocationAutocompleteInput({
       setErrorMessage('');
 
       try {
-        const nextSuggestions = await searchLocationSuggestions(trimmedValue, controller.signal);
+        const nextSuggestions = await searchLocationSuggestions(trimmedValue, controller.signal, type);
         setSuggestions(nextSuggestions);
+        setActiveIndex(nextSuggestions.length > 0 ? 0 : -1);
         setIsOpen(true);
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -96,6 +100,7 @@ export default function LocationAutocompleteInput({
     setSuggestions([]);
     setHasSearched(false);
     setErrorMessage('');
+    setActiveIndex(-1);
     onValueChange(event.target.value);
     setIsOpen(true);
   }
@@ -108,6 +113,7 @@ export default function LocationAutocompleteInput({
     setIsOpen(false);
     setHasSearched(false);
     setErrorMessage('');
+    setActiveIndex(-1);
   }
 
   const shouldShowDropdown = isOpen && (
@@ -127,7 +133,18 @@ export default function LocationAutocompleteInput({
         value={value}
         onChange={handleInputChange}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') {
+          if (event.key === 'ArrowDown' && suggestions.length > 0) {
+            event.preventDefault();
+            setIsOpen(true);
+            setActiveIndex((current) => (current + 1) % suggestions.length);
+          } else if (event.key === 'ArrowUp' && suggestions.length > 0) {
+            event.preventDefault();
+            setIsOpen(true);
+            setActiveIndex((current) => (current <= 0 ? suggestions.length - 1 : current - 1));
+          } else if (event.key === 'Enter' && isOpen && activeIndex >= 0 && suggestions[activeIndex]) {
+            event.preventDefault();
+            handleSuggestionClick(suggestions[activeIndex]);
+          } else if (event.key === 'Escape') {
             setIsOpen(false);
           }
         }}
@@ -152,13 +169,15 @@ export default function LocationAutocompleteInput({
           ) : errorMessage ? (
             <div className="location-autocomplete-state">{errorMessage}</div>
           ) : suggestions.length > 0 ? (
-            suggestions.map((suggestion) => (
+            suggestions.map((suggestion, index) => (
               <button
                 key={suggestion.placeId}
                 type="button"
-                className="location-autocomplete-option"
+                className={`location-autocomplete-option ${index === activeIndex ? 'is-active' : ''}`}
                 onClick={() => handleSuggestionClick(suggestion)}
+                onMouseEnter={() => setActiveIndex(index)}
                 role="option"
+                aria-selected={index === activeIndex}
               >
                 <div className="location-autocomplete-option-row">
                   <strong>{suggestion.displayName}</strong>

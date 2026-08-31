@@ -264,7 +264,7 @@ export const MOCK_ADMIN_USERS = [
     email: 'admin@hvhn.com',
     role: 'ADMIN',
     communityId: 'community-iit-delhi',
-    community: 'HVHN Platform',
+    community: 'Sahay Platform',
     verified: true,
     blocked: false,
     badge: 'Hero',

@@ -1,12 +1,8 @@
-import { TrendingUp, TrendingDown } from 'lucide-react';
-
 export default function StatsCard({ 
   title, 
   value, 
   tone = 'blue', 
-  helper, 
-  trendValue, 
-  trendDirection = 'up' 
+  helper,
 }) {
   return (
     <div className="admin-stats-card card card-glass-lite">
@@ -20,13 +16,6 @@ export default function StatsCard({
             {value}
           </strong>
         </div>
-        
-        {trendValue && (
-          <div className={`flex items-center gap-1 font-bold text-xs ${trendDirection === 'up' ? 'text-green-500' : 'text-red-500'}`}>
-            {trendDirection === 'up' ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-            <span>{trendValue}</span>
-          </div>
-        )}
       </div>
 
       {helper && (

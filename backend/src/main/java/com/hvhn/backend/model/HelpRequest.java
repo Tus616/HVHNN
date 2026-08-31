@@ -1,8 +1,15 @@
 package com.hvhn.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
+import org.springframework.data.mongodb.core.index.GeoSpatialIndexType;
+import org.springframework.data.mongodb.core.index.GeoSpatialIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
@@ -12,6 +19,12 @@ import java.util.Map;
 
 
 @Document(collection = "help_requests")
+@CompoundIndex(name = "idx_request_status_created", def = "{'status': 1, 'createdAt': -1}")
+@CompoundIndex(name = "idx_request_category_status", def = "{'category': 1, 'status': 1}")
+@CompoundIndex(name = "idx_request_volunteer_status", def = "{'volunteerId': 1, 'status': 1}")
+@CompoundIndex(name = "idx_request_city_status", def = "{'city': 1, 'status': 1}")
+@CompoundIndex(name = "idx_request_district_status", def = "{'district': 1, 'status': 1}")
+@CompoundIndex(name = "idx_request_state_status", def = "{'state': 1, 'status': 1}")
 public class HelpRequest {
     @Id
     private String id;
@@ -23,9 +36,19 @@ public class HelpRequest {
     private String urgency; // LOW, MEDIUM, HIGH, CRITICAL
     @Indexed
     private String status; // OPEN, ACCEPTED, IN_PROGRESS, COMPLETED, CANCELLED, EXPIRED
+    @Indexed
+    private String scope = "GLOBAL";
     private Double latitude;
     private Double longitude;
+    @GeoSpatialIndexed(name = "idx_help_requests_location_2dsphere", type = GeoSpatialIndexType.GEO_2DSPHERE)
+    private GeoJsonPoint geoLocation;
     private String address;
+    private String city;
+    private String district;
+    private String state;
+    private String postalCode;
+    private String locationSource = "UNKNOWN";
+    private LocalDateTime locationUpdatedAt;
     private String contactPhone;
     private List<Double> embedding;
     private String requiredBloodGroup;
@@ -79,7 +102,11 @@ public class HelpRequest {
     private int shareCount = 0;
 
     @CreatedDate
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt;
+    @LastModifiedDate
+    private LocalDateTime updatedAt;
+    @Version
+    private Long lifecycleVersion;
 
     private LocalDateTime acceptedAt;
     private LocalDateTime completedAt;
@@ -90,6 +117,11 @@ public class HelpRequest {
     private boolean requesterRated = false;
     private Integer volunteerRating;
     private String volunteerFeedback;
+    private boolean deletedByRequester = false;
+    private LocalDateTime deletedByRequesterAt;
+    
+    private boolean deletedByVolunteer = false;
+    private LocalDateTime deletedByVolunteerAt;
 
     public HelpRequest() {}
 
@@ -139,15 +171,31 @@ public class HelpRequest {
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getScope() { return scope; }
+    public void setScope(String scope) { this.scope = scope; }
 
     public Double getLatitude() { return latitude; }
     public void setLatitude(Double latitude) { this.latitude = latitude; }
 
     public Double getLongitude() { return longitude; }
     public void setLongitude(Double longitude) { this.longitude = longitude; }
+    public GeoJsonPoint getGeoLocation() { return geoLocation; }
+    public void setGeoLocation(GeoJsonPoint geoLocation) { this.geoLocation = geoLocation; }
 
     public String getAddress() { return address; }
     public void setAddress(String address) { this.address = address; }
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
+    public String getState() { return state; }
+    public void setState(String state) { this.state = state; }
+    public String getPostalCode() { return postalCode; }
+    public void setPostalCode(String postalCode) { this.postalCode = postalCode; }
+    public String getLocationSource() { return locationSource; }
+    public void setLocationSource(String locationSource) { this.locationSource = locationSource; }
+    public LocalDateTime getLocationUpdatedAt() { return locationUpdatedAt; }
+    public void setLocationUpdatedAt(LocalDateTime locationUpdatedAt) { this.locationUpdatedAt = locationUpdatedAt; }
 
     public String getContactPhone() { return contactPhone; }
     public void setContactPhone(String contactPhone) { this.contactPhone = contactPhone; }
@@ -199,6 +247,23 @@ public class HelpRequest {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public Long getLifecycleVersion() { return lifecycleVersion; }
+    public void setLifecycleVersion(Long lifecycleVersion) { this.lifecycleVersion = lifecycleVersion; }
+
+    // Backward/alternate JSON field names expected by some clients
+    @JsonProperty("location")
+    public String getLocation() { return address; }
+
+    @JsonProperty("contact")
+    public String getContact() { return contactPhone; }
+
+    @JsonProperty("views")
+    public int getViews() { return viewCount; }
+
+    @JsonProperty("userId")
+    public String getUserId() { return requesterId; }
 
     public LocalDateTime getAcceptedAt() { return acceptedAt; }
     public void setAcceptedAt(LocalDateTime acceptedAt) { this.acceptedAt = acceptedAt; }
@@ -226,6 +291,18 @@ public class HelpRequest {
 
     public String getVolunteerFeedback() { return volunteerFeedback; }
     public void setVolunteerFeedback(String volunteerFeedback) { this.volunteerFeedback = volunteerFeedback; }
+
+    public boolean isDeletedByRequester() { return deletedByRequester; }
+    public void setDeletedByRequester(boolean deletedByRequester) { this.deletedByRequester = deletedByRequester; }
+
+    public LocalDateTime getDeletedByRequesterAt() { return deletedByRequesterAt; }
+    public void setDeletedByRequesterAt(LocalDateTime deletedByRequesterAt) { this.deletedByRequesterAt = deletedByRequesterAt; }
+
+    public boolean isDeletedByVolunteer() { return deletedByVolunteer; }
+    public void setDeletedByVolunteer(boolean deletedByVolunteer) { this.deletedByVolunteer = deletedByVolunteer; }
+
+    public LocalDateTime getDeletedByVolunteerAt() { return deletedByVolunteerAt; }
+    public void setDeletedByVolunteerAt(LocalDateTime deletedByVolunteerAt) { this.deletedByVolunteerAt = deletedByVolunteerAt; }
 
     private Map<String, Object> ocrDetails = new java.util.HashMap<>();
 
